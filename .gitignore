@@ -1,0 +1,12 @@
+node_modules/
+build/
+dist/
+venv/
+.env
+*.db
+.DS_Store
+*.log
+backend/venv/
+web/node_modules/
+web/build/
+backend/secrets/

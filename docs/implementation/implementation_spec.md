@@ -162,13 +162,37 @@ No retries. No fallback models. No re‑entry.
 
 ## 9. AI Contract Enforcement (Mandatory)
 
-### 9.1 Validator Gate
+### 9.1 AI Client Responsibilities
+
+The AI Client SHALL:
+- Accept EngineTruth as immutable input
+- Translate engine facts into Socratic questions
+- Reflect on student annotations
+
+The AI Client SHALL NOT:
+- Perform chess calculations
+- Evaluate positions
+- Identify tactics independently
+
+Any AI output that contradicts EngineTruth MUST be rejected by the runtime.
+
+### 9.2 Required AI Input
+
+All AI requests MUST include:
+- Student annotation
+- Engine evaluation score
+- Engine best move
+- Engine-derived threats (if available)
+
+Free-form AI prompts without this data are prohibited.
+
+### 9.3 Validator Gate
 
 - Every AI response MUST pass its role‑specific validator
 - Validation occurs **before persistence or exposure**
 - Any violation immediately aborts the pipeline
 
-### 9.2 Failure Policy
+### 9.4 Failure Policy
 
 - No auto‑repair
 - No partial output

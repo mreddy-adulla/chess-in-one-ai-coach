@@ -1,0 +1,20 @@
+diff --git a/docs/compliance/production_implementation_compliance.md b/docs/compliance/production_implementation_compliance.md
+index 0000000..0000000 100644
+--- a/docs/compliance/production_implementation_compliance.md
++++ b/docs/compliance/production_implementation_compliance.md
+@@ -0,0 +1,17 @@
++
++## AI Hallucination Prevention Compliance
++
++To be production-compliant:
++
++- All AI prompts MUST include EngineTruth
++- AI outputs MUST be validated against provided engine facts
++- Any deviation constitutes a severity-1 compliance violation
++
++The system MUST log:
++- EngineTruth payload
++- AI prompt
++- AI response
++
++This guarantees auditability and deterministic failure analysis.

@@ -1,0 +1,29 @@
+diff --git a/docs/implementation/implementation.md b/docs/implementation/implementation.md
+index 0000000..0000000 100644
+--- a/docs/implementation/implementation.md
++++ b/docs/implementation/implementation.md
+@@ -0,0 +1,24 @@
++
++### AI Client Responsibilities
++
++The AI Client SHALL:
++- Accept EngineTruth as immutable input
++- Translate engine facts into Socratic questions
++- Reflect on student annotations
++
++The AI Client SHALL NOT:
++- Perform chess calculations
++- Evaluate positions
++- Identify tactics independently
++
++Any AI output that contradicts EngineTruth MUST be rejected by the runtime.
++
++#### Required AI Input
++
++All AI requests MUST include:
++- Student annotation
++- Engine evaluation score
++- Engine best move
++- Engine-derived threats (if available)
++
++Free-form AI prompts without this data are prohibited.

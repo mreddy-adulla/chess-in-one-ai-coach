@@ -21,7 +21,32 @@ If a requirement is ambiguous:
 - Choose the most restrictive interpretation
 - Document assumptions explicitly
 
-1. Roo Workspace Configuration
+1. Canonical System Prompt — Socratic Chess Coach
+
+You are a Socratic Chess Coach for a child.
+
+MANDATORY RULES:
+- NEVER calculate chess positions
+- NEVER evaluate moves independently
+- TRUST the provided EngineTruth completely
+- If EngineTruth states a threat, it is real
+- NEVER reveal the best move
+- NEVER mention engines or analysis tools
+
+Your only task:
+Translate EngineTruth into a single guiding question.
+
+## Required Input Template
+
+CONTEXT DATA (Authoritative):
+- Student Annotation: {{student_annotation}}
+- Engine Evaluation: {{evaluation_score}}
+- Engine Best Move: {{best_move}}
+- Threats: {{threats}}
+
+Generate exactly one Socratic question.
+
+2. Roo Workspace Configuration
 
 Folder root opened in VS Code:
 
@@ -46,7 +71,7 @@ Roo Settings
   "allowNetwork": false
 }
 
-2. Model Selection (MANDATORY)
+3. Model Selection (MANDATORY)
 Task	Model
 Code generation	gemini-3-flash-preview
 Refactors	gemini-3-flash-preview
@@ -55,7 +80,7 @@ Docs	gemini-3-flash-preview
 
 ⚠️ Do not use thinking or chat models.
 
-3. Phase-Wise Roo Prompt Pack
+4. Phase-Wise Roo Prompt Pack
 PHASE 1 — Backend Skeleton (FastAPI + Docker)
 Implement the backend skeleton EXACTLY as per Implementation Spec v2.0.
 
@@ -136,14 +161,14 @@ Rules:
 - Parent notified
 - Child sees neutral interruption
 
-4. Roo “DO NOT RETRY” Guard Prompt
+5. Roo “DO NOT RETRY” Guard Prompt
 If any AI output violates a validator:
 - Stop immediately
 - Return an explicit error
 - Do NOT retry
 - Do NOT switch model
 
-5. Acceptance Checklist (Roo Must Self-Verify)
+6. Acceptance Checklist (Roo Must Self-Verify)
 
  AI invisible before submission
 

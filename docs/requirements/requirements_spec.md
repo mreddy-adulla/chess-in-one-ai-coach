@@ -356,7 +356,25 @@ Metrics SHALL NOT be used for:
 
 ---
 
-## 16. Compliance Guardrails
+## 16. AI Reasoning Constraint (Hard Requirement)
+
+The AI Coach SHALL NOT calculate, infer, or evaluate chess positions.
+
+All chess correctness MUST be derived exclusively from engine-provided facts,
+including:
+- Evaluation scores
+- Best moves
+- Threat identification
+
+The AI Coach’s responsibility is strictly limited to translating verified
+engine truth into Socratic-style pedagogical guidance.
+
+Any AI response that introduces new chess facts not present in the engine
+context SHALL be treated as a critical system failure.
+
+---
+
+## 17. Compliance Guardrails
 
 The system is NON‑COMPLIANT if:
 - AI appears before submission

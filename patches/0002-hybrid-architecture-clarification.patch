@@ -1,0 +1,20 @@
+diff --git a/docs/design/design.md b/docs/design/design.md
+index 0000000..0000000 100644
+--- a/docs/design/design.md
++++ b/docs/design/design.md
+@@ -0,0 +1,17 @@
++
++## Hybrid Intelligence Architecture (Explicit)
++
++The system follows a strict Hybrid Intelligence model:
++
++- Chess engines (Stockfish / Chess API providers) are the sole source of chess truth
++- The AI Coach is a pedagogical interpreter, not a chess reasoner
++
++The AI Coach:
++- MUST trust engine-provided facts as authoritative
++- MUST NOT independently evaluate positions
++- MUST NOT search for best moves or tactics
++
++This separation is mandatory to prevent hallucination and ensure
++deterministic chess correctness.

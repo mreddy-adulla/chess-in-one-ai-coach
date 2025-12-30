@@ -66,6 +66,27 @@
 │ • No provider choice by child             │
 └──────────────────────────────────────────┘
 
+### EngineTruth Contract
+
+Before invoking the AI Coach, the backend MUST construct an EngineTruth object
+derived from chess engine analysis.
+
+This object represents the complete and authoritative chess state as far as
+the AI is concerned.
+
+The AI Coach SHALL NOT receive raw board state without accompanying
+EngineTruth.
+
+#### EngineTruth (Logical Model)
+
+EngineTruth MAY include:
+- Evaluation score (centipawns or mate distance)
+- Best move (SAN)
+- Blunder severity indicator
+- Material or tactical threats (if detectable)
+
+The presence of EngineTruth is mandatory even if some fields are coarse.
+
 ## Parent Control Interface (PCI) — Functional Specification
 2.1 Purpose
 

@@ -1,0 +1,26 @@
+diff --git a/docs/design/consolidated_design_details.md b/docs/design/consolidated_design_details.md
+index 0000000..0000000 100644
+--- a/docs/design/consolidated_design_details.md
++++ b/docs/design/consolidated_design_details.md
+@@ -0,0 +1,22 @@
++
++### EngineTruth Contract
++
++Before invoking the AI Coach, the backend MUST construct an EngineTruth object
++derived from chess engine analysis.
++
++This object represents the complete and authoritative chess state as far as
++the AI is concerned.
++
++The AI Coach SHALL NOT receive raw board state without accompanying
++EngineTruth.
++
++#### EngineTruth (Logical Model)
++
++EngineTruth MAY include:
++- Evaluation score (centipawns or mate distance)
++- Best move (SAN)
++- Blunder severity indicator
++- Material or tactical threats (if detectable)
++
++The presence of EngineTruth is mandatory even if some fields are coarse.

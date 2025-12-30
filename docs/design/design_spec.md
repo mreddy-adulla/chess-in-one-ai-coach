@@ -57,6 +57,22 @@ Create a **child‑safe, reflective chess coaching system** that improves *think
 
 ---
 
+## 3.3 Hybrid Intelligence Architecture (Explicit)
+
+The system follows a strict Hybrid Intelligence model:
+
+- Chess engines (Stockfish / Chess API providers) are the sole source of chess truth
+- The AI Coach is a pedagogical interpreter, not a chess reasoner
+
+The AI Coach:
+- MUST trust engine-provided facts as authoritative
+- MUST NOT independently evaluate positions
+- MUST NOT search for best moves or tactics
+
+This separation is mandatory to prevent hallucination and ensure deterministic chess correctness.
+
+---
+
 ## 4. UX PHASE DESIGN (CONFIRMED)
 
 | Phase | Description | AI Visibility |
