@@ -1,0 +1,41 @@
+{
+  "version": "2.0",
+  "tasks": [
+    {
+      "label": "Phase 1 - Backend Skeleton",
+      "type": "roo",
+      "model": "gemini-3-flash-preview",
+      "prompt": "Implement backend skeleton per Implementation Spec v2.0"
+    },
+    {
+      "label": "Phase 2 - Game Lifecycle",
+      "type": "roo",
+      "model": "gemini-3-flash-preview",
+      "prompt": "Implement game lifecycle and persistence rules"
+    },
+    {
+      "label": "Phase 3 - AI Orchestrator",
+      "type": "roo",
+      "model": "gemini-3-flash-preview",
+      "prompt": "Implement deterministic AI orchestrator with validators"
+    },
+    {
+      "label": "Phase 4 - AI Contracts & Validators",
+      "type": "roo",
+      "model": "gemini-3-flash-preview",
+      "prompt": "Add AI contracts and output validators"
+    },
+    {
+      "label": "Phase 5 - Parent Control Interface",
+      "type": "roo",
+      "model": "gemini-3-flash-preview",
+      "prompt": "Implement PCI APIs and approval logic"
+    },
+    {
+      "label": "Phase 6 - Failure & Resume",
+      "type": "roo",
+      "model": "gemini-3-flash-preview",
+      "prompt": "Implement AI failure handling and resume logic"
+    }
+  ]
+}
