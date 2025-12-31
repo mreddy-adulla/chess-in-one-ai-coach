@@ -7,3 +7,5 @@ sqlalchemy[asyncio]
 asyncpg
 redis
 python-dotenv
+chess
+httpx

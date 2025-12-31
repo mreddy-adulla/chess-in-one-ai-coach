@@ -4,6 +4,7 @@ from sqlalchemy import select
 from api.common.models import Game, GameState, KeyPosition, Question
 from api.common.config import settings
 from api.ai.validators.orchestrator_validator import validate_analyzer_output
+from api.ai.providers.engine import ChessEngineProvider
 
 class AIOrchestrator:
     """
@@ -13,6 +14,7 @@ class AIOrchestrator:
     def __init__(self, db: AsyncSession, redis_client: redis.Redis):
         self.db = db
         self.redis = redis_client
+        self.engine = ChessEngineProvider()
 
     async def run_pipeline(self, game_id: int):
         # Redis lock guards AI pipeline (Implementation Spec 16)

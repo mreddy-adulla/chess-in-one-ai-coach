@@ -85,7 +85,7 @@ const GameEntry: React.FC = () => {
 
   const handleSubmit = async () => {
     if (id && window.confirm("Are you sure? This will lock annotations and start AI coaching.")) {
-      await submitGame(parseInt(id));
+      await submitGame(parseInt(id), chess.pgn());
       window.location.hash = `/game/${id}/waiting`;
     }
   };

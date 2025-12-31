@@ -1,14 +1,19 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Request
+from fastapi import APIRouter, Depends, HTTPException, status, Request, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update
 from api.common.database import get_db
-from api.common.models import Game, GameState, Annotation
+from api.common.models import Game, GameState, Annotation, Question, KeyPosition
 from datetime import datetime
 from api.auth.middleware import AuthMiddleware
+from pydantic import BaseModel
+from api.ai.orchestrator import AIOrchestrator
+import redis.asyncio as redis
+from api.common.config import settings
 
 router = APIRouter(prefix="/games", tags=["games"])
 
-from pydantic import BaseModel
+class GameSubmit(BaseModel):
+    pgn: str
 
 class AnnotationCreate(BaseModel):
     move_number: int
@@ -59,42 +64,49 @@ async def get_game(game_id: int, db: AsyncSession = Depends(get_db)):
     return game
 
 @router.post("/{game_id}/submit")
-async def submit_game(game_id: int, db: AsyncSession = Depends(get_db)):
+async def submit_game(game_id: int, submit_data: GameSubmit, background_tasks: BackgroundTasks, db: AsyncSession = Depends(get_db)):
     """
     Implements PHASE 2: Game Lifecycle enforcement.
     EDITABLE -> SUBMITTED -> COACHING -> COMPLETED
     """
-    async with db.begin():
-        # Fetch game
-        result = await db.execute(select(Game).where(Game.id == game_id))
-        game = result.scalar_one_or_none()
-        
-        if not game:
-            raise HTTPException(status_code=404, detail="Game not found")
+    # Fetch game
+    result = await db.execute(select(Game).where(Game.id == game_id))
+    game = result.scalar_one_or_none()
+    
+    if not game:
+        raise HTTPException(status_code=404, detail="Game not found")
 
-        # Idempotency (Implementation Spec 6.2)
-        if game.state == GameState.SUBMITTED:
-            return {"message": "Game already submitted", "state": game.state}
+    # Update PGN from client submission
+    game.pgn = submit_data.pgn
 
-        # Transition Rule: Only EDITABLE -> SUBMITTED is allowed here
-        if game.state != GameState.EDITABLE:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT, 
-                detail=f"Invalid transition from {game.state} to SUBMITTED"
-            )
+    # Idempotency (Implementation Spec 6.2)
+    if game.state == GameState.SUBMITTED:
+        return {"message": "Game already submitted", "state": game.state}
 
-        # 1. Freeze all annotations (Implementation Spec 7.1)
-        await db.execute(
-            update(Annotation)
-            .where(Annotation.game_id == game_id)
-            .values(frozen=True)
+    # Transition Rule: Only EDITABLE -> SUBMITTED is allowed here
+    if game.state != GameState.EDITABLE:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, 
+            detail=f"Invalid transition from {game.state} to SUBMITTED"
         )
 
-        # 2. Update state to SUBMITTED
-        game.state = GameState.SUBMITTED
-        
-        # State transition + side effects occur in single transaction (Implementation Spec 7.3)
-        await db.commit()
+    # 1. Freeze all annotations (Implementation Spec 7.1)
+    await db.execute(
+        update(Annotation)
+        .where(Annotation.game_id == game_id)
+        .values(frozen=True)
+    )
+
+    # 2. Update state to SUBMITTED
+    game.state = GameState.SUBMITTED
+    
+    # State transition + side effects occur in single transaction (Implementation Spec 7.3)
+    await db.commit()
+
+    # Trigger AI Pipeline asynchronously
+    redis_client = redis.from_url(settings.REDIS_URL)
+    orchestrator = AIOrchestrator(db, redis_client)
+    background_tasks.add_task(orchestrator.run_pipeline, game_id)
 
     return {"message": "Game submitted successfully", "state": game.state}
 
@@ -142,24 +154,23 @@ async def get_next_question(game_id: int, db: AsyncSession = Depends(get_db)):
     Implements PHASE 6: Failure & Resume Logic.
     Resume continues from last unanswered question (Implementation Spec 10.2).
     """
-    async with db.begin():
-        # Implementation logic to find first question without answer_text or skipped=False
-        # ordered by key_position order and question order
-        result = await db.execute(
-            select(Question)
-            .join(KeyPosition)
-            .where(KeyPosition.game_id == game_id)
-            .where(Question.answer_text == None)
-            .where(Question.skipped == False)
-            .order_by(KeyPosition.order, Question.order)
-            .limit(1)
-        )
-        question = result.scalar_one_or_none()
+    # Implementation logic to find first question without answer_text or skipped=False
+    # ordered by key_position order and question order
+    result = await db.execute(
+        select(Question)
+        .join(KeyPosition)
+        .where(KeyPosition.game_id == game_id)
+        .where(Question.answer_text == None)
+        .where(Question.skipped == False)
+        .order_by(KeyPosition.order, Question.order)
+        .limit(1)
+    )
+    question = result.scalar_one_or_none()
+    
+    if not question:
+        return {"message": "All questions completed"}
         
-        if not question:
-            return {"message": "All questions completed"}
-            
-        return question
+    return question
 
 @router.post("/questions/{question_id}/answer")
 async def answer_question(question_id: int, answer: str, db: AsyncSession = Depends(get_db)):

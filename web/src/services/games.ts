@@ -30,9 +30,10 @@ export async function addAnnotation(gameId: number, moveNumber: number, content:
   });
 }
 
-export async function submitGame(gameId: number) {
+export async function submitGame(gameId: number, pgn: string) {
   return ApiService.request(`/games/${gameId}/submit`, {
     method: "POST",
+    body: JSON.stringify({ pgn }),
   });
 }
 
