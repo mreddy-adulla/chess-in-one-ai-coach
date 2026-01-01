@@ -15,13 +15,17 @@ const GuidedQuestioning: React.FC = () => {
       setLoading(true);
       try {
         const q = await getNextQuestion(parseInt(id));
+        console.log('[GuidedQuestioning] Next question:', q);
         if (!q || q.message === "All questions completed") {
+           console.log('[GuidedQuestioning] All questions answered, moving to reflection');
            window.location.hash = `/game/${id}/reflection`;
            return;
         }
         setQuestion(q);
       } catch (err) {
-        window.location.hash = `/game/${id}/reflection`;
+        console.error('[GuidedQuestioning] Error fetching question:', err);
+        // Do not auto-redirect on error, stay on page to see error
+        // window.location.hash = `/game/${id}/reflection`;
       }
       setLoading(false);
     }

@@ -13,9 +13,13 @@ const AIProcessing: React.FC = () => {
     const poll = async () => {
       try {
         const game = await getGame(parseInt(id));
+        console.log('[AIProcessing] Polling state:', game.state);
+        // Explicitly check for COACHING state to move to questions
         if (game.state === 'COACHING') {
+          console.log('[AIProcessing] Transitioning to Guided Questioning');
           window.location.hash = `/game/${id}/coaching`;
         } else if (game.state === 'COMPLETED') {
+          console.log('[AIProcessing] Transitioning to Final Reflection');
           window.location.hash = `/game/${id}/reflection`;
         }
       } catch (err) {

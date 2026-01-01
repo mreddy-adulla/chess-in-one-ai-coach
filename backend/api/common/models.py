@@ -30,6 +30,7 @@ class Game(Base):
 
     annotations = relationship("Annotation", back_populates="game", cascade="all, delete-orphan")
     key_positions = relationship("KeyPosition", back_populates="game", cascade="all, delete-orphan")
+    reflection = Column(JSON) # AI generated reflection
 
 class Annotation(Base):
     __tablename__ = "annotations"

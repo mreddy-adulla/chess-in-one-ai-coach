@@ -6,6 +6,7 @@ export interface GameMetadata {
   event: string;
   date: string;
   time_control: string;
+  pgn?: string;
 }
 
 export async function getGames() {
@@ -21,6 +22,12 @@ export async function createGame(metadata: GameMetadata) {
 
 export async function getGame(gameId: number) {
   return ApiService.request(`/games/${gameId}`);
+}
+
+export async function deleteGame(gameId: number) {
+  return ApiService.request(`/games/${gameId}`, {
+    method: "DELETE",
+  });
 }
 
 export async function addAnnotation(gameId: number, moveNumber: number, content: string) {

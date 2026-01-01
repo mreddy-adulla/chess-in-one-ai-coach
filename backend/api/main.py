@@ -10,6 +10,13 @@ import os
 app = FastAPI(title="Chess-in-One AI Coach")
 print("BACKEND VERSION 2.0 STARTING")
 
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    print(f"DEBUG: Incoming request: {request.method} {request.url.path}")
+    response = await call_next(request)
+    print(f"DEBUG: Response status: {response.status_code}")
+    return response
+
 # Add CORS Middleware (MUST BE BEFORE AuthMiddleware to handle preflights correctly)
 app.add_middleware(
     CORSMiddleware,
@@ -31,9 +38,21 @@ base_dir = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
 pci_static_path = os.path.join(base_dir, "web", "build")
 pci_static_assets_path = os.path.join(pci_static_path, "static")
 
+if os.path.exists(pci_static_path):
+    # Mount tailwind.css if it exists directly in build
+    tailwind_path = os.path.join(pci_static_path, "tailwind.css")
+    if os.path.exists(tailwind_path):
+        @app.get("/pci-gui/tailwind.css")
+        async def serve_pci_gui_tailwind():
+            return FileResponse(tailwind_path)
+        @app.get("/pci-ui/tailwind.css")
+        async def serve_pci_ui_tailwind():
+            return FileResponse(tailwind_path)
+    
 if os.path.exists(pci_static_assets_path):
     # Mount static files
     app.mount("/pci-gui/static", StaticFiles(directory=pci_static_assets_path), name="static")
+    app.mount("/pci-ui/static", StaticFiles(directory=pci_static_assets_path), name="static-ui")
     
 if os.path.exists(os.path.join(pci_static_path, "index.html")):
     @app.get("/pci-gui/{path:path}")
@@ -46,6 +65,15 @@ if os.path.exists(os.path.join(pci_static_path, "index.html")):
     async def serve_pci_gui_root():
         # Redirect to the PCI route in the HashRouter
         return RedirectResponse(url="/pci-gui/#/pci")
+
+    @app.get("/pci-ui/{path:path}")
+    async def serve_pci_ui(path: str):
+        index_path = os.path.join(pci_static_path, "index.html")
+        return FileResponse(index_path)
+    
+    @app.get("/pci-ui")
+    async def serve_pci_ui_root():
+        return RedirectResponse(url="/pci-ui/#/pci")
 
 @app.get("/health")
 async def health_check():

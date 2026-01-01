@@ -9,7 +9,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
         if request.method == "OPTIONS":
             return await call_next(request)
 
-        if request.url.path in ["/health", "/", "/docs", "/openapi.json"] or request.url.path.startswith("/pci-gui"):
+        if request.url.path in ["/health", "/", "/docs", "/openapi.json"] or request.url.path.startswith("/pci-gui") or request.url.path.startswith("/pci-ui"):
             return await call_next(request)
 
         auth_header = request.headers.get("Authorization")

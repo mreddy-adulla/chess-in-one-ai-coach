@@ -27,7 +27,7 @@ class GameListActivity : AppCompatActivity() {
         setContentView(R.layout.activity_game_list)
 
         val retrofit = Retrofit.Builder()
-            .baseUrl("http://10.0.2.2:8000/") // Android Emulator loopback to host
+            .baseUrl("https://chess-coach.tailnet-xyz.ts.net/") // Tailscale Funnel Address
             .addConverterFactory(GsonConverterFactory.create())
             .build()
         apiService = retrofit.create(ChessApiService::class.java)

@@ -11,6 +11,11 @@ router = APIRouter(prefix="/pci", tags=["pci"])
 class SettingUpdate(BaseModel):
     settings: Dict[str, str]
 
+class ApprovalRequest(BaseModel):
+    game_id: int
+    tier: str
+    duration_hours: int = 24
+
 class ApprovalDecision(BaseModel):
     decision: str # APPROVE, DENY
 
@@ -59,8 +64,16 @@ async def update_settings(update_data: SettingUpdate, db: AsyncSession = Depends
     return {"message": "Settings updated"}
 
 @router.post("/approvals")
-async def create_approval(game_id: int, tier: str, db: AsyncSession = Depends(get_db)):
-    approval = ParentApproval(game_id=game_id, tier=tier)
+async def create_approval(request: ApprovalRequest, db: AsyncSession = Depends(get_db)):
+    from datetime import datetime, timedelta, timezone
+    expires_at = datetime.now(timezone.utc) + timedelta(hours=request.duration_hours)
+    approval = ParentApproval(
+        game_id=request.game_id, 
+        tier=request.tier, 
+        expires_at=expires_at,
+        approved=False,
+        used=False
+    )
     db.add(approval)
     await db.commit()
     await db.refresh(approval)
@@ -76,6 +89,7 @@ async def approval_decision(approval_id: int, decision_data: ApprovalDecision, d
     approval.approved = (decision_data.decision == "APPROVE")
     await db.commit()
     return {"message": f"Approval {decision_data.decision.lower()}ed"}
+
 
 @router.get("/usage")
 async def get_usage(db: AsyncSession = Depends(get_db)):

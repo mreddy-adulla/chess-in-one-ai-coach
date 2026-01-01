@@ -13,7 +13,8 @@ from sqlalchemy.orm import sessionmaker
 
 async def init_db():
     async with engine.begin() as conn:
-        # Import all models here to ensure they are registered with Base.metadata
+        # Drop all tables and recreate them to apply schema changes (reflection column)
+        await conn.run_sync(Base.metadata.drop_all)
         await conn.run_sync(Base.metadata.create_all)
     
     # Seed settings
