@@ -1,10 +1,11 @@
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, RedirectResponse, JSONResponse
 from api.auth.middleware import AuthMiddleware
 from api.games.router import router as games_router
 from api.pci.router import router as pci_router
+from api.common.exceptions import ChessCoachError
 import os
 
 app = FastAPI(title="Chess-in-One AI Coach")
@@ -29,6 +30,14 @@ app.add_middleware(
 # Add Authentication Middleware
 app.add_middleware(AuthMiddleware)
 
+# Global exception handler
+@app.exception_handler(ChessCoachError)
+async def chess_coach_exception_handler(request: Request, exc: ChessCoachError):
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": str(exc), "type": exc.__class__.__name__}
+    )
+
 # Include Routers
 app.include_router(games_router)
 app.include_router(pci_router)
@@ -36,44 +45,22 @@ app.include_router(pci_router)
 # Resolve path to web/build
 base_dir = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
 pci_static_path = os.path.join(base_dir, "web", "build")
-pci_static_assets_path = os.path.join(pci_static_path, "static")
 
 if os.path.exists(pci_static_path):
-    # Mount tailwind.css if it exists directly in build
-    tailwind_path = os.path.join(pci_static_path, "tailwind.css")
-    if os.path.exists(tailwind_path):
-        @app.get("/pci-gui/tailwind.css")
-        async def serve_pci_gui_tailwind():
-            return FileResponse(tailwind_path)
-        @app.get("/pci-ui/tailwind.css")
-        async def serve_pci_ui_tailwind():
-            return FileResponse(tailwind_path)
-    
-if os.path.exists(pci_static_assets_path):
-    # Mount static files
-    app.mount("/pci-gui/static", StaticFiles(directory=pci_static_assets_path), name="static")
-    app.mount("/pci-ui/static", StaticFiles(directory=pci_static_assets_path), name="static-ui")
-    
-if os.path.exists(os.path.join(pci_static_path, "index.html")):
-    @app.get("/pci-gui/{path:path}")
-    async def serve_pci_gui(path: str):
-        # Serve index.html for any path under /pci-gui/ (SPA support)
-        index_path = os.path.join(pci_static_path, "index.html")
-        return FileResponse(index_path)
-    
+    # Mount the entire build directory with SPA support
+    app.mount("/pci-gui", StaticFiles(directory=pci_static_path, html=True), name="pci-gui")
+    app.mount("/pci-ui", StaticFiles(directory=pci_static_path, html=True), name="pci-ui")
+
+    # Redirect root to PCI route in HashRouter
     @app.get("/pci-gui")
     async def serve_pci_gui_root():
-        # Redirect to the PCI route in the HashRouter
         return RedirectResponse(url="/pci-gui/#/pci")
 
-    @app.get("/pci-ui/{path:path}")
-    async def serve_pci_ui(path: str):
-        index_path = os.path.join(pci_static_path, "index.html")
-        return FileResponse(index_path)
-    
     @app.get("/pci-ui")
     async def serve_pci_ui_root():
         return RedirectResponse(url="/pci-ui/#/pci")
+else:
+    print("WARNING: PCI static path not found at", pci_static_path)
 
 @app.get("/health")
 async def health_check():

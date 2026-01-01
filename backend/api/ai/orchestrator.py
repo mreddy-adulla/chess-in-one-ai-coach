@@ -5,6 +5,7 @@ from api.common.models import Game, GameState, KeyPosition, Question
 from api.common.config import settings
 from api.ai.validators.orchestrator_validator import validate_analyzer_output
 from api.ai.providers.engine import ChessEngineProvider
+from api.common.lock_manager import LockManager
 
 class AIOrchestrator:
     """
@@ -14,6 +15,7 @@ class AIOrchestrator:
     def __init__(self, db: AsyncSession, redis_client: redis.Redis):
         self.db = db
         self.redis = redis_client
+        self.lock_manager = LockManager(redis_client)
         self.engine = ChessEngineProvider()
 
     async def run_pipeline(self, game_id: int, tier: str = "STANDARD"):
@@ -31,7 +33,7 @@ class AIOrchestrator:
         # Redis lock guards AI pipeline (Implementation Spec 16)
         lock_key = f"ai_lock:{game_id}"
         try:
-            async with self.redis.lock(lock_key, timeout=300):
+            async with self.lock_manager.with_lock(lock_key):
                 print(f"DEBUG: Acquired lock {lock_key}")
                 async with self.db.begin():
                     result = await self.db.execute(select(Game).where(Game.id == game_id))
@@ -93,7 +95,13 @@ class AIOrchestrator:
                         }
                         await self.db.commit()
                         print(f"DEBUG: Game {game_id} state set to COACHING and dynamic reflection persisted")
-        except redis.exceptions.ConnectionError as e:
+        except RuntimeError as e:
+            if "Could not acquire lock" in str(e):
+                print(f"DEBUG: Could not acquire lock for game {game_id}")
+                # State already set to COACHING, so user won't hang
+                return
+            raise
+        except redis.ConnectionError as e:
             print(f"CRITICAL: Redis connection failed during pipeline for game {game_id}: {str(e)}")
             # Fallback: We already set state to COACHING, so the user won't hang forever
             # but we need to run analyzer without lock if absolutely necessary?

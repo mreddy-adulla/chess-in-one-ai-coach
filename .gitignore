@@ -2,6 +2,7 @@ node_modules/
 build/
 dist/
 venv/
+.venv/
 .env
 *.db
 .DS_Store

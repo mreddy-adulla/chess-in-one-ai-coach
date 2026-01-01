@@ -9,3 +9,7 @@ redis
 python-dotenv
 chess
 httpx
+pytest
+pytest-asyncio
+pytest-cov
+aiosqlite
