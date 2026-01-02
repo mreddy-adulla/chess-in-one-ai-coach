@@ -6,6 +6,7 @@ from api.common.config import settings
 from api.ai.validators.orchestrator_validator import validate_analyzer_output
 from api.ai.providers.engine import ChessEngineProvider
 from api.ai.providers.socratic_questioner import SocraticQuestionerProvider
+from api.ai.position_analyzer import PositionAnalyzer, PositionAnalysis
 from api.common.lock_manager import LockManager
 from typing import Optional
 
@@ -20,6 +21,7 @@ class AIOrchestrator:
         self.lock_manager = LockManager(redis_client) if redis_client else LockManager(None)
         self.engine = ChessEngineProvider()
         self.questioner = SocraticQuestionerProvider()
+        self.position_analyzer = PositionAnalyzer()
 
     async def run_pipeline(self, game_id: int, tier: str = "STANDARD"):
         print(f"DEBUG: AIOrchestrator.run_pipeline started for game {game_id} with tier {tier}")
@@ -149,11 +151,15 @@ class AIOrchestrator:
             full_move_number = (move_count + 1) // 2
             
             if full_move_number >= 10 and is_player_turn:
+                # Get the move that was played (in UCI format)
+                played_move_uci = next_node.move.uci() if next_node.move else None
+                
                 positions.append({
                     "fen": board.fen(),
                     "move_number": full_move_number,  # Store full move number for clarity
                     "half_move_number": move_count,  # Also store half-move for reference
-                    "is_player_turn": is_player_turn
+                    "is_player_turn": is_player_turn,
+                    "played_move": played_move_uci  # Store the move that was actually played
                 })
             
             node = next_node
@@ -179,108 +185,137 @@ class AIOrchestrator:
                     break
                 node = next_node
         
-        # Analyze positions to find key moments
-        # Sample positions throughout the game (not all, to avoid too many API calls)
-        sample_size = min(5, len(positions))
-        if sample_size == 0:
+        # Analyze positions to find key moments using advanced position analyzer
+        if len(positions) == 0:
             print(f"DEBUG: No positions to analyze for game {game.id}")
             return {"key_positions": []}
         
-        # Select positions evenly distributed throughout the game
-        step = max(1, len(positions) // sample_size)
-        sampled_positions = positions[::step][:sample_size]
+        # Analyze all positions (or sample if too many to avoid API rate limits)
+        # Sample up to 10 positions for analysis, then select the best 3-5
+        max_positions_to_analyze = min(10, len(positions))
+        if len(positions) > max_positions_to_analyze:
+            # Sample evenly distributed positions
+            step = max(1, len(positions) // max_positions_to_analyze)
+            positions_to_analyze = positions[::step][:max_positions_to_analyze]
+        else:
+            positions_to_analyze = positions
         
-        key_positions = []
-        previous_eval = None
-        
-        # Add timeout protection for the entire analysis loop
         import asyncio
         import logging
         logger = logging.getLogger(__name__)
         
-        for pos_data in sampled_positions:
+        # Analyze all sampled positions with engine and position analyzer
+        position_analyses = []
+        previous_eval = None
+        
+        for pos_data in positions_to_analyze:
             try:
                 # Analyze position with engine (with fallback on error)
-                # Each position analysis has its own timeout, but add extra protection here
                 analysis = await asyncio.wait_for(
                     self.engine.analyze_position(pos_data["fen"], fallback_on_error=True),
-                    timeout=60.0  # Max 60 seconds per position (should be much less)
+                    timeout=60.0  # Max 60 seconds per position
                 )
                 
-                eval_score = analysis.get("score", 0)
-                best_move = analysis.get("best_move", "")
-                threats = analysis.get("threats", [])
+                # Use advanced position analyzer for comprehensive analysis
+                position_analysis = self.position_analyzer.analyze_position(
+                    fen=pos_data["fen"],
+                    move_number=pos_data["move_number"],
+                    half_move_number=pos_data["half_move_number"],
+                    is_player_turn=pos_data["is_player_turn"],
+                    engine_analysis=analysis,
+                    played_move=pos_data.get("played_move"),
+                    previous_eval=previous_eval
+                )
                 
-                # Determine reason code based on position characteristics
-                reason_code = "THREAT_AWARENESS"  # Default
+                position_analyses.append(position_analysis)
+                previous_eval = position_analysis.eval_score
                 
-                # Check for significant evaluation change (transition)
-                if previous_eval is not None:
-                    eval_change = abs(eval_score - previous_eval)
-                    if eval_change > 0.5:  # Significant change
-                        reason_code = "TRANSITION"
-                
-                # Check for threats
-                if threats:
-                    reason_code = "THREAT_AWARENESS"
-                
-                # Check if it's a critical position (high evaluation swing potential)
-                if abs(eval_score) > 1.0:
-                    reason_code = "OPP_INTENT"  # Likely missed opponent's plan
-                
-                # Use move number as a fallback for reason code if engine data is minimal
-                if not best_move and not threats:
-                    # Distribute reason codes based on position order
-                    reason_codes = ["OPP_INTENT", "THREAT_AWARENESS", "TRANSITION", "THREAT_AWARENESS", "OPP_INTENT"]
-                    reason_code = reason_codes[len(key_positions) % len(reason_codes)]
-                
-                key_positions.append({
-                    "fen": pos_data["fen"],
-                    "reason_code": reason_code,
-                    "engine_truth": {
-                        "score": eval_score,
-                        "best_move": best_move,
-                        "threats": threats if threats else []
-                    }
-                })
-                
-                previous_eval = eval_score
+                logger.debug(
+                    f"Position {pos_data['move_number']}: "
+                    f"criticality={position_analysis.criticality_score:.1f}, "
+                    f"reason={position_analysis.reason_code}, "
+                    f"tactics={position_analysis.tactical_patterns}"
+                )
                 
             except asyncio.TimeoutError:
-                logger.warning(f"Position analysis timed out for {pos_data['fen']}, using fallback")
-                # Use fallback values
-                reason_codes = ["OPP_INTENT", "THREAT_AWARENESS", "TRANSITION", "THREAT_AWARENESS", "OPP_INTENT"]
-                reason_code = reason_codes[len(key_positions) % len(reason_codes)]
-                key_positions.append({
-                    "fen": pos_data["fen"],
-                    "reason_code": reason_code,
-                    "engine_truth": {
-                        "score": 0.0,
-                        "best_move": "",
-                        "threats": []
-                    }
-                })
+                logger.warning(f"Position analysis timed out for {pos_data['fen']}, skipping")
+                continue
             except Exception as e:
-                print(f"DEBUG: Error analyzing position {pos_data['fen']}: {e}")
-                # Even on error, add the position with default values
-                reason_codes = ["OPP_INTENT", "THREAT_AWARENESS", "TRANSITION", "THREAT_AWARENESS", "OPP_INTENT"]
-                reason_code = reason_codes[len(key_positions) % len(reason_codes)]
-                key_positions.append({
-                    "fen": pos_data["fen"],
-                    "reason_code": reason_code,
-                    "engine_truth": {
-                        "score": 0.0,
-                        "best_move": "",
-                        "threats": []
-                    }
-                })
+                logger.warning(f"Error analyzing position {pos_data['fen']}: {e}")
                 continue
         
+        # Select the most critical positions using the analyzer's selection method
+        if len(position_analyses) == 0:
+            logger.warning(f"No positions successfully analyzed for game {game.id}")
+            # Fallback to old method if analyzer fails completely
+            return self._fallback_key_positions(positions, chess_game, game.id)
+        
+        selected_analyses = self.position_analyzer.select_key_positions(
+            position_analyses,
+            min_positions=3,
+            max_positions=5
+        )
+        
+        # Convert PositionAnalysis objects to key_positions format
+        key_positions = []
+        for analysis in selected_analyses:
+            key_positions.append({
+                "fen": analysis.fen,
+                "reason_code": analysis.reason_code,
+                "engine_truth": {
+                    "score": analysis.eval_score,
+                    "best_move": analysis.best_move,
+                    "threats": analysis.threats if analysis.threats else []
+                }
+            })
+        
+        logger.info(
+            f"Selected {len(key_positions)} key positions with criticality scores: "
+            f"{[f'{a.criticality_score:.1f}' for a in selected_analyses]}"
+        )
+        
         # Ensure we have at least 1 key position (minimum for pipeline to work)
-        # Ideally 3-5, but we'll work with what we have
         if len(key_positions) == 0:
+            logger.warning(f"No key positions selected, using fallback for game {game.id}")
+            return self._fallback_key_positions(positions, chess_game, game.id)
+        
+        # Ensure we have 3-5 key positions (preferred)
+        if len(key_positions) < 3 and len(position_analyses) > len(key_positions):
+            # Add more positions from remaining analyses
+            remaining = [a for a in position_analyses if a.fen not in [kp["fen"] for kp in key_positions]]
+            remaining_sorted = sorted(remaining, key=lambda a: a.criticality_score, reverse=True)
+            
+            for analysis in remaining_sorted[:3-len(key_positions)]:
+                key_positions.append({
+                    "fen": analysis.fen,
+                    "reason_code": analysis.reason_code,
+                    "engine_truth": {
+                        "score": analysis.eval_score,
+                        "best_move": analysis.best_move,
+                        "threats": analysis.threats if analysis.threats else []
+                    }
+                })
+        
+        if len(key_positions) > 5:
+            # If we have too many, take the top 5 by criticality
+            key_positions = key_positions[:5]
+        
+        output = {"key_positions": key_positions}
+        logger.info(f"Analyzer output: {len(key_positions)} key positions found")
+        return output
+    
+    def _fallback_key_positions(self, positions: List[Dict], chess_game, game_id: int) -> Dict:
+        """
+        Fallback method when advanced analyzer fails.
+        Uses simple heuristics to select positions.
+        """
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.warning(f"Using fallback key position selection for game {game_id}")
+        
+        if len(positions) == 0:
             # Last resort: use a position from the middle/end of the game
-            print(f"DEBUG: No key positions found, using fallback position")
+            import chess
             board = chess_game.board()
             node = chess_game
             move_count = 0
@@ -300,59 +335,40 @@ class AIOrchestrator:
                 node = next_node
             
             if move_count >= 10:
-                key_positions.append({
-                    "fen": board.fen(),
-                    "reason_code": "THREAT_AWARENESS",
-                    "engine_truth": {
-                        "score": 0.0,
-                        "best_move": "",
-                        "threats": []
-                    }
-                })
+                return {
+                    "key_positions": [{
+                        "fen": board.fen(),
+                        "reason_code": "THREAT_AWARENESS",
+                        "engine_truth": {
+                            "score": 0.0,
+                            "best_move": "",
+                            "threats": []
+                        }
+                    }]
+                }
             else:
-                # Absolute fallback: use any position we can get
-                board = chess_game.board()
-                node = chess_game
-                move_count = 0
-                while node.variations and move_count < 10:
-                    next_node = node.variation(0)
-                    board.push(next_node.move)
-                    move_count += 1
-                    node = next_node
-                key_positions.append({
-                    "fen": board.fen(),
-                    "reason_code": "THREAT_AWARENESS",
-                    "engine_truth": {
-                        "score": 0.0,
-                        "best_move": "",
-                        "threats": []
-                    }
-                })
+                return {"key_positions": []}
         
-        # Ensure we have 3-5 key positions (preferred)
-        if len(key_positions) < 3 and len(sampled_positions) > len(key_positions):
-            # Add more positions from the sampled list
-            remaining = [p for p in sampled_positions if p["fen"] not in [kp["fen"] for kp in key_positions]]
-            for pos_data in remaining[:3-len(key_positions)]:
-                reason_codes = ["OPP_INTENT", "THREAT_AWARENESS", "TRANSITION"]
-                reason_code = reason_codes[len(key_positions) % len(reason_codes)]
-                key_positions.append({
-                    "fen": pos_data["fen"],
-                    "reason_code": reason_code,
-                    "engine_truth": {
-                        "score": 0.0,
-                        "best_move": "",
-                        "threats": []
-                    }
-                })
+        # Use simple distribution: take evenly spaced positions
+        sample_size = min(3, len(positions))
+        step = max(1, len(positions) // sample_size)
+        sampled = positions[::step][:sample_size]
         
-        if len(key_positions) > 5:
-            # If we have too many, take the first 5
-            key_positions = key_positions[:5]
+        key_positions = []
+        reason_codes = ["OPP_INTENT", "THREAT_AWARENESS", "TRANSITION"]
         
-        output = {"key_positions": key_positions}
-        print(f"DEBUG: Analyzer output: {len(key_positions)} key positions found")
-        return output
+        for i, pos_data in enumerate(sampled):
+            key_positions.append({
+                "fen": pos_data["fen"],
+                "reason_code": reason_codes[i % len(reason_codes)],
+                "engine_truth": {
+                    "score": 0.0,
+                    "best_move": "",
+                    "threats": []
+                }
+            })
+        
+        return {"key_positions": key_positions}
 
     async def _generate_socratic_questions(self, kp: KeyPosition):
         """
