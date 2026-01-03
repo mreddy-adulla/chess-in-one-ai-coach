@@ -1080,29 +1080,1163 @@ sequenceDiagram
     end
 ```
 
+### 13.5 Game Creation and Annotation Flow
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant API
+    participant GameService
+    participant DB
+    
+    Client->>API: POST /games {player_color, opponent_name, ...}
+    API->>GameService: create_game(user_id, ...)
+    GameService->>DB: Create Game(state=EDITABLE)
+    DB-->>GameService: Game(id, state)
+    GameService->>DB: Extract annotations from PGN (if provided)
+    GameService->>DB: Commit transaction
+    DB-->>GameService: Game persisted
+    GameService-->>API: Game object
+    API-->>Client: 201 Created {id, state, ...}
+    
+    loop For each move annotation
+        Client->>API: POST /games/{id}/annotations {move_number, content}
+        API->>DB: Check state == EDITABLE
+        alt State is EDITABLE
+            API->>DB: Save/update Annotation
+            DB-->>API: Success
+            API-->>Client: 200 OK
+        else State is not EDITABLE
+            API-->>Client: 403 Forbidden
+        end
+    end
+```
+
+### 13.6 Parent Approval Workflow
+
+```mermaid
+sequenceDiagram
+    participant Child
+    participant API
+    participant SubmissionService
+    participant DB
+    participant Parent
+    participant PCI
+    
+    Child->>API: POST /games/{id}/submit {tier: "ADVANCED"}
+    API->>SubmissionService: submit_game(game_id, tier)
+    SubmissionService->>DB: Check requires_approval(tier)
+    DB-->>SubmissionService: Requires approval
+    
+    SubmissionService->>DB: Query valid approval
+    DB-->>SubmissionService: No approval found
+    SubmissionService-->>API: ValueError("Parent approval required")
+    API-->>Child: 403 Forbidden
+    
+    Note over Child,Parent: Child requests approval from parent
+    
+    Parent->>PCI: POST /pci/approvals {game_id, tier, duration_hours}
+    PCI->>DB: Create ParentApproval(approved=false)
+    DB-->>PCI: Approval record created
+    PCI-->>Parent: Approval request created
+    
+    Parent->>PCI: POST /pci/approvals/{id}/decision {decision: "APPROVE"}
+    PCI->>DB: Update approval(approved=true)
+    DB-->>PCI: Approval updated
+    PCI-->>Parent: Approval granted
+    
+    Child->>API: POST /games/{id}/submit {tier: "ADVANCED"}
+    API->>SubmissionService: submit_game(game_id, tier)
+    SubmissionService->>DB: Get valid approval
+    DB-->>SubmissionService: Valid approval found
+    SubmissionService->>DB: Mark approval as used
+    SubmissionService->>DB: Update game state to SUBMITTED
+    SubmissionService-->>API: Success
+    API-->>Child: 202 Accepted
+```
+
+### 13.7 Error Recovery and Fallback Flow
+
+```mermaid
+sequenceDiagram
+    participant Orchestrator
+    participant Engine
+    participant AIProvider
+    participant DB
+    
+    Orchestrator->>Engine: analyze_position(fen)
+    
+    alt Engine API fails
+        Engine-->>Orchestrator: Timeout/Error
+        Orchestrator->>Engine: Retry with backoff
+        Engine-->>Orchestrator: Error again
+        Orchestrator->>Orchestrator: Use fallback values
+        Note over Orchestrator: score=0.0, best_move="", threats=[]
+    else Engine API succeeds
+        Engine-->>Orchestrator: {score, best_move, threats}
+    end
+    
+    Orchestrator->>AIProvider: generate_question(category, engine_truth)
+    
+    alt AI Provider fails
+        AIProvider-->>Orchestrator: API Error
+        Orchestrator->>AIProvider: Try fallback provider
+        alt Fallback provider fails
+            AIProvider-->>Orchestrator: Error
+            Orchestrator->>Orchestrator: Use template question
+            Note over Orchestrator: Template question generated
+        else Fallback succeeds
+            AIProvider-->>Orchestrator: Question text
+        end
+    else AI Provider succeeds
+        AIProvider-->>Orchestrator: Question text
+    end
+    
+    Orchestrator->>DB: Save question
+    Note over Orchestrator,DB: Pipeline continues despite failures
+```
+
+### 13.8 Reflection Generation Sequence
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant API
+    participant DB
+    participant ReflectionGen
+    participant AIProvider
+    
+    Client->>API: POST /questions/{id}/answer {content: "..."}
+    API->>DB: Save answer
+    API->>DB: Check remaining questions
+    DB-->>API: No remaining questions
+    
+    API->>ReflectionGen: generate_reflection(answers_by_category)
+    ReflectionGen->>DB: Fetch all answered questions
+    DB-->>ReflectionGen: Questions with answers
+    
+    ReflectionGen->>ReflectionGen: Group answers by category
+    
+    alt AI Provider configured
+        ReflectionGen->>AIProvider: generate_reflection(...)
+        alt AI succeeds
+            AIProvider-->>ReflectionGen: {thinking_patterns, missing_elements, habits}
+        else AI fails
+            AIProvider-->>ReflectionGen: Error
+            ReflectionGen->>ReflectionGen: Use template reflection
+        end
+    else No AI configured
+        ReflectionGen->>ReflectionGen: Generate template reflection
+    end
+    
+    ReflectionGen->>DB: Save reflection in Game.reflection
+    ReflectionGen->>DB: Update state to COMPLETED
+    ReflectionGen-->>API: Success
+    API-->>Client: 200 OK {message: "Answer recorded"}
+    
+    Client->>API: GET /games/{id}/reflection
+    API->>DB: Query game.reflection
+    DB-->>API: Reflection JSON
+    API-->>Client: 200 OK {thinking_patterns, missing_elements, habits}
+```
+
+### 13.9 Component Interaction Diagram
+
+```mermaid
+graph TB
+    subgraph API["API Layer"]
+        Router[Router<br/>games/router.py]
+        PCI[PCI Router<br/>pci/router.py]
+        Questions[Questions Router<br/>questions/router.py]
+    end
+    
+    subgraph Services["Service Layer"]
+        GameSvc[GameService<br/>game_service.py]
+        SubmitSvc[SubmissionService<br/>submission_service.py]
+        AnnotationSvc[AnnotationService<br/>annotation_service.py]
+    end
+    
+    subgraph AI["AI Layer"]
+        Orchestrator[AIOrchestrator<br/>orchestrator.py]
+        PositionAnalyzer[PositionAnalyzer<br/>position_analyzer.py]
+        QuestionSelector[QuestionSelector<br/>question_selector.py]
+    end
+    
+    subgraph Providers["Provider Layer"]
+        Engine[EngineProvider<br/>engine.py]
+        Questioner[SocraticQuestioner<br/>socratic_questioner.py]
+        ReflectionGen[ReflectionGenerator<br/>reflection_generator.py]
+    end
+    
+    subgraph Data["Data Layer"]
+        DB[(Database<br/>PostgreSQL/SQLite)]
+        Redis[(Redis<br/>Optional)]
+    end
+    
+    Router --> GameSvc
+    Router --> SubmitSvc
+    Router --> AnnotationSvc
+    Router --> Orchestrator
+    
+    PCI --> SubmitSvc
+    
+    Questions --> DB
+    
+    SubmitSvc --> Orchestrator
+    Orchestrator --> PositionAnalyzer
+    Orchestrator --> QuestionSelector
+    Orchestrator --> Questioner
+    Orchestrator --> ReflectionGen
+    
+    PositionAnalyzer --> Engine
+    QuestionSelector --> Questioner
+    Questioner --> Engine
+    
+    Orchestrator --> DB
+    Orchestrator --> Redis
+    GameSvc --> DB
+    SubmitSvc --> DB
+    AnnotationSvc --> DB
+```
+
+### 13.10 Data Flow Diagram
+
+```mermaid
+flowchart TD
+    Start([User Creates Game]) --> Create[POST /games]
+    Create --> EditState[Game State: EDITABLE]
+    
+    EditState --> Annotate[User Adds Annotations]
+    Annotate --> SaveAnnot[POST /games/{id}/annotations]
+    SaveAnnot --> EditState
+    
+    EditState --> Submit[User Submits Game]
+    Submit --> SubmitAPI[POST /games/{id}/submit]
+    SubmitAPI --> CheckApproval{Approval<br/>Required?}
+    
+    CheckApproval -->|Yes| ApprovalCheck{Valid<br/>Approval?}
+    CheckApproval -->|No| FreezeAnnot[Freeze Annotations]
+    
+    ApprovalCheck -->|No| Reject[403 Forbidden]
+    ApprovalCheck -->|Yes| FreezeAnnot
+    
+    FreezeAnnot --> SubmittedState[Game State: SUBMITTED]
+    SubmittedState --> TriggerPipeline[Trigger AI Pipeline]
+    
+    TriggerPipeline --> ParsePGN[Parse PGN]
+    ParsePGN --> CollectPos[Collect Positions after Move 10]
+    CollectPos --> AnalyzePos[Analyze Each Position]
+    
+    AnalyzePos --> EngineCall[Call Chess Engine API]
+    EngineCall --> EngineTruth[EngineTruth: score, best_move, threats]
+    
+    EngineTruth --> PositionAnalysis[Position Analysis]
+    PositionAnalysis --> CriticalityScore[Calculate Criticality Score]
+    CriticalityScore --> SelectKeyPos[Select 3-5 Key Positions]
+    
+    SelectKeyPos --> GenerateQuestions[Generate Questions per Position]
+    GenerateQuestions --> AIQuestion[Call AI Provider]
+    AIQuestion --> QuestionText[Question Text]
+    QuestionText --> SaveQuestions[Save Questions to DB]
+    
+    SaveQuestions --> CoachingState[Game State: COACHING]
+    
+    CoachingState --> GetQuestion[GET /games/{id}/next-question]
+    GetQuestion --> DisplayQuestion[Display Question to User]
+    DisplayQuestion --> Answer[User Answers Question]
+    Answer --> SaveAnswer[POST /questions/{id}/answer]
+    SaveAnswer --> CheckRemaining{All Questions<br/>Answered?}
+    
+    CheckRemaining -->|No| GetQuestion
+    CheckRemaining -->|Yes| GenerateReflection[Generate Reflection]
+    
+    GenerateReflection --> AIReflection[Call AI Provider]
+    AIReflection --> ReflectionData[Reflection: thinking_patterns, missing_elements, habits]
+    ReflectionData --> SaveReflection[Save Reflection to DB]
+    SaveReflection --> CompletedState[Game State: COMPLETED]
+    
+    CompletedState --> DisplayReflection[Display Reflection to User]
+    DisplayReflection --> End([End])
+```
+
+### 13.11 Deployment Diagram
+
+```mermaid
+graph TB
+    subgraph Internet["Public Internet"]
+        Client1[Web Browser]
+        Client2[Android App]
+    end
+    
+    subgraph Tailscale["Tailscale Network"]
+        Funnel[Tailscale Funnel<br/>TLS Termination<br/>Public HTTPS]
+    end
+    
+    subgraph MacMini["Mac Mini (Private Network)"]
+        subgraph Docker["Docker Compose"]
+            FastAPI[FastAPI Container<br/>127.0.0.1:8080]
+            PostgreSQL[PostgreSQL Container<br/>Internal Network]
+            Redis[Redis Container<br/>Internal Network<br/>Optional]
+        end
+        
+        EnvFile[.env File<br/>Configuration & Secrets]
+    end
+    
+    subgraph ExternalAPIs["External APIs"]
+        OpenAI[OpenAI API<br/>HTTPS]
+        Gemini[Google Vertex AI<br/>HTTPS]
+        Stockfish[Stockfish.online<br/>HTTPS]
+        ChessAPI[Chess-API.com<br/>HTTPS]
+    end
+    
+    Client1 -->|HTTPS| Funnel
+    Client2 -->|HTTPS| Funnel
+    Funnel -->|localhost:8080| FastAPI
+    
+    FastAPI --> PostgreSQL
+    FastAPI --> Redis
+    FastAPI -->|Read| EnvFile
+    FastAPI -->|HTTPS| OpenAI
+    FastAPI -->|HTTPS| Gemini
+    FastAPI -->|HTTPS| Stockfish
+    FastAPI -->|HTTPS| ChessAPI
+```
+
+### 13.12 Security Boundary Diagram
+
+```mermaid
+graph TB
+    subgraph Untrusted["Untrusted Zone"]
+        WebClient[Web Client<br/>Zero-Trust]
+        AndroidClient[Android Client<br/>Zero-Trust]
+    end
+    
+    subgraph Edge["Edge Security"]
+        Tailscale[Tailscale Funnel<br/>TLS Termination<br/>Public Certificate]
+    end
+    
+    subgraph Trusted["Trusted Zone"]
+        subgraph Backend["Backend Services"]
+            API[FastAPI API<br/>JWT Validation<br/>Role-Based Access]
+            Auth[Auth Middleware<br/>Device Binding]
+        end
+        
+        subgraph Data["Data Layer"]
+            DB[(PostgreSQL<br/>Encrypted at Rest)]
+            Redis[(Redis<br/>Internal Only)]
+            EnvFile[.env File<br/>File System Permissions]
+        end
+        
+        subgraph AI["AI Processing"]
+            Orchestrator[AI Orchestrator<br/>Validated Outputs]
+            Providers[AI Providers<br/>Credential Protected]
+        end
+    end
+    
+    subgraph External["External Services"]
+        AIAPIs[AI APIs<br/>HTTPS Only<br/>No PII]
+        EngineAPIs[Engine APIs<br/>HTTPS Only]
+    end
+    
+    WebClient -->|HTTPS| Tailscale
+    AndroidClient -->|HTTPS| Tailscale
+    Tailscale -->|localhost| API
+    
+    API --> Auth
+    Auth -->|Validated| API
+    
+    API --> DB
+    API --> Redis
+    API --> Orchestrator
+    Orchestrator --> Providers
+    Providers -->|HTTPS| AIAPIs
+    Providers -->|HTTPS| EngineAPIs
+    
+    Providers -->|Read Only| EnvFile
+    
+    style Untrusted fill:#ffcccc
+    style Trusted fill:#ccffcc
+    style Edge fill:#ffffcc
+    style External fill:#ccccff
+```
+
 ---
 
 ## 14. Appendices
 
-### 14.1 API Reference
+### 14.1 Complete API Reference
 
-**See Section 7 for complete API documentation**
+#### 14.1.1 Game Management Endpoints
+
+**POST /games** - Create a new game
+
+**Request**:
+```json
+{
+  "player_color": "WHITE",
+  "opponent_name": "John Doe",
+  "event": "Local Tournament",
+  "date": "2026-01-03T10:00:00Z",
+  "time_control": "15+10",
+  "pgn": "1. e4 e5 2. Nf3 Nc6 ..."
+}
+```
+
+**Response** (201 Created):
+```json
+{
+  "id": 1,
+  "user_id": "user123",
+  "state": "EDITABLE",
+  "player_color": "WHITE",
+  "opponent_name": "John Doe",
+  "event": "Local Tournament",
+  "date": "2026-01-03T10:00:00Z",
+  "time_control": "15+10",
+  "pgn": "1. e4 e5 2. Nf3 Nc6 ...",
+  "created_at": "2026-01-03T10:00:00Z",
+  "updated_at": "2026-01-03T10:00:00Z"
+}
+```
+
+**GET /games** - List all games
+
+**Response** (200 OK):
+```json
+[
+  {
+    "id": 1,
+    "opponent_name": "John Doe",
+    "state": "EDITABLE",
+    "created_at": "2026-01-03T10:00:00Z"
+  },
+  {
+    "id": 2,
+    "opponent_name": "Jane Smith",
+    "state": "COACHING",
+    "created_at": "2026-01-02T15:30:00Z"
+  }
+]
+```
+
+**GET /games/{id}** - Get game details
+
+**Response** (200 OK):
+```json
+{
+  "id": 1,
+  "user_id": "user123",
+  "state": "EDITABLE",
+  "player_color": "WHITE",
+  "opponent_name": "John Doe",
+  "annotations": [
+    {
+      "id": 1,
+      "move_number": 10,
+      "content": "I was looking for tactics here",
+      "frozen": false
+    }
+  ]
+}
+```
+
+**POST /games/{id}/submit** - Submit game for AI processing
+
+**Request**:
+```json
+{
+  "pgn": "1. e4 e5 2. Nf3 Nc6 ...",
+  "tier": "STANDARD"
+}
+```
+
+**Response** (202 Accepted):
+```json
+{
+  "message": "Game submitted successfully",
+  "state": "SUBMITTED"
+}
+```
+
+**Error Response** (403 Forbidden) - Parent approval required:
+```json
+{
+  "detail": "Parent approval required for ADVANCED tier or repeat run"
+}
+```
+
+**Error Response** (409 Conflict) - Invalid state:
+```json
+{
+  "detail": "Invalid transition from COACHING to SUBMITTED"
+}
+```
+
+**POST /games/{id}/annotations** - Add or update annotation
+
+**Request**:
+```json
+{
+  "move_number": 10,
+  "content": "I was looking for tactics here"
+}
+```
+
+**Response** (200 OK):
+```json
+{
+  "message": "Annotation saved"
+}
+```
+
+**Error Response** (403 Forbidden) - Game not editable:
+```json
+{
+  "detail": "Cannot add annotations to non-editable game"
+}
+```
+
+#### 14.1.2 Question Endpoints
+
+**GET /games/{id}/next-question** - Get next unanswered question
+
+**Response** (200 OK):
+```json
+{
+  "id": 5,
+  "key_position_id": 2,
+  "category": "THREAT",
+  "question_text": "What threats do you see in this position?",
+  "order": 0,
+  "fen": "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1",
+  "original_annotation": "I was looking for tactics here"
+}
+```
+
+**Response** (204 No Content) - All questions completed:
+```json
+{
+  "message": "All questions completed"
+}
+```
+
+**POST /questions/{id}/answer** - Answer a question
+
+**Request**:
+```json
+{
+  "content": "I see a fork threat on my knight",
+  "skipped": false
+}
+```
+
+**Or skip**:
+```json
+{
+  "content": "",
+  "skipped": true
+}
+```
+
+**Response** (200 OK):
+```json
+{
+  "message": "Answer recorded"
+}
+```
+
+**Error Response** (409 Conflict) - Already answered:
+```json
+{
+  "detail": "Question already answered"
+}
+```
+
+#### 14.1.3 Reflection Endpoints
+
+**GET /games/{id}/reflection** - Get final reflection
+
+**Response** (200 OK):
+```json
+{
+  "thinking_patterns": [
+    "You focused on tactical opportunities in several positions",
+    "You recognized threats when they were immediate"
+  ],
+  "missing_elements": [
+    "Long-term strategic planning",
+    "Opponent's positional intentions"
+  ],
+  "habits": [
+    "Before each move, ask: 'What is my opponent trying to accomplish?'",
+    "Scan the entire board for piece activity, not just the center"
+  ]
+}
+```
+
+**Error Response** (400 Bad Request) - Not ready:
+```json
+{
+  "detail": "Reflection not available yet. The game analysis is still in progress."
+}
+```
+
+#### 14.1.4 Parent Control Interface Endpoints
+
+**GET /pci/settings** - Get AI provider settings
+
+**Response** (200 OK):
+```json
+{
+  "settings": {
+    "GOOGLE_CLOUD_PROJECT": "gen-lang-client-0397559410",
+    "GOOGLE_CLOUD_LOCATION": "us-central1",
+    "AI_MODEL_NAME": "gemini-1.5-flash"
+  },
+  "masked_settings": {
+    "OPENAI_API_KEY": "sk-...abcd",
+    "GOOGLE_APPLICATION_CREDENTIALS_JSON": "{\"type\":\"service_account\",\"project_id\":\"...\",\"client_email\":\"...\",\"private_key\":\"***MASKED***\"}"
+  },
+  "configured": {
+    "GOOGLE_CLOUD_PROJECT": true,
+    "OPENAI_API_KEY": false,
+    "GOOGLE_APPLICATION_CREDENTIALS_JSON": true
+  }
+}
+```
+
+**POST /pci/settings** - Update AI provider settings
+
+**Request**:
+```json
+{
+  "settings": {
+    "OPENAI_API_KEY": "sk-...",
+    "OPENAI_MODEL_NAME": "gpt-4o-mini"
+  }
+}
+```
+
+**Response** (200 OK):
+```json
+{
+  "message": "Settings updated in .env file. Restart backend to apply changes."
+}
+```
+
+**POST /pci/approvals** - Create approval request
+
+**Request**:
+```json
+{
+  "game_id": 1,
+  "tier": "ADVANCED",
+  "duration_hours": 24
+}
+```
+
+**Response** (201 Created):
+```json
+{
+  "id": 1,
+  "game_id": 1,
+  "tier": "ADVANCED",
+  "approved": false,
+  "expires_at": "2026-01-04T10:00:00Z",
+  "used": false,
+  "created_at": "2026-01-03T10:00:00Z"
+}
+```
+
+**POST /pci/approvals/{id}/decision** - Approve or deny request
+
+**Request**:
+```json
+{
+  "decision": "APPROVE"
+}
+```
+
+**Response** (200 OK):
+```json
+{
+  "message": "Approval approved"
+}
+```
+
+**GET /pci/usage** - View AI usage history
+
+**Response** (200 OK):
+```json
+{
+  "usage": [
+    {
+      "id": 1,
+      "game_id": 1,
+      "tier": "STANDARD",
+      "approved": true,
+      "used": true,
+      "expires_at": "2027-01-03T10:00:00Z",
+      "created_at": "2026-01-03T10:00:00Z"
+    }
+  ]
+}
+```
+
+#### 14.1.5 Authentication
+
+All endpoints (except public routes) require authentication via Bearer token:
+
+**Header**:
+```
+Authorization: Bearer <JWT_TOKEN>
+```
+
+**JWT Token Structure**:
+```json
+{
+  "sub": "user123",
+  "role": "CHILD",
+  "device_id": "device-uuid-1234",
+  "exp": 1735920000
+}
+```
+
+**Error Response** (401 Unauthorized):
+```json
+{
+  "detail": "Missing or invalid token"
+}
+```
+
+**Error Response** (403 Forbidden) - Wrong role:
+```json
+{
+  "detail": "Parent access required"
+}
+```
 
 ### 14.2 Database Schema Reference
 
-**See Section 3.2 for complete schema documentation**
+#### 14.2.1 Entity Relationship Diagram
+
+```mermaid
+erDiagram
+    Game ||--o{ Annotation : has
+    Game ||--o{ KeyPosition : has
+    Game ||--o{ ParentApproval : has
+    KeyPosition ||--o{ Question : has
+    
+    Game {
+        int id PK
+        string user_id
+        enum state
+        string player_color
+        string opponent_name
+        string event
+        datetime date
+        string time_control
+        string pgn
+        json reflection
+        datetime created_at
+        datetime updated_at
+    }
+    
+    Annotation {
+        int id PK
+        int game_id FK
+        int move_number
+        string content
+        boolean frozen
+    }
+    
+    KeyPosition {
+        int id PK
+        int game_id FK
+        string fen
+        string reason_code
+        json engine_truth
+        int order
+    }
+    
+    Question {
+        int id PK
+        int key_position_id FK
+        string category
+        string question_text
+        string answer_text
+        boolean skipped
+        int order
+    }
+    
+    ParentApproval {
+        int id PK
+        int game_id FK
+        string tier
+        boolean approved
+        datetime expires_at
+        boolean used
+        datetime created_at
+    }
+    
+    SystemSetting {
+        int id PK
+        string key UK
+        string value
+        datetime updated_at
+    }
+```
+
+#### 14.2.2 Table Relationships
+
+- **Game → Annotation**: One-to-many (cascade delete)
+- **Game → KeyPosition**: One-to-many (cascade delete)
+- **Game → ParentApproval**: One-to-many
+- **KeyPosition → Question**: One-to-many (cascade delete)
+
+#### 14.2.3 Indexes
+
+- `Game.user_id`: Indexed for user queries
+- `Game.state`: Used for state filtering
+- `Annotation.game_id`: Foreign key index
+- `Annotation.frozen`: Used for state enforcement
+- `KeyPosition.game_id`: Foreign key index
+- `Question.key_position_id`: Foreign key index
+- `Question.answer_text`: Used for finding unanswered questions
+- `SystemSetting.key`: Unique index
 
 ### 14.3 Configuration Reference
 
-**Environment Variables**:
-- See Section 8.3 for complete list
+#### 14.3.1 Sample .env File
 
-**File Locations**:
-- `.env`: `backend/.env`
-- Logs: `docs/debug/backend.log`
-- Database: `backend/chess_coach.db` (SQLite) or PostgreSQL
+```env
+# Database Configuration
+DATABASE_URL=sqlite+aiosqlite:///./chess_coach.db
+# For PostgreSQL: DATABASE_URL=postgresql+asyncpg://user:password@localhost/chess_coach
 
-### 14.4 Troubleshooting Guide
+# Redis Configuration (Optional)
+REDIS_URL=redis://localhost:6379/0
+
+# Authentication
+JWT_SECRET=your-secret-key-here-change-in-production
+JWT_ALGORITHM=HS256
+ALLOW_DEV_TOKEN_ENDPOINT=0
+
+# OpenAI Configuration (Optional)
+OPENAI_API_KEY=sk-...
+OPENAI_MODEL_NAME=gpt-4o-mini
+
+# Google Vertex AI Configuration (Optional)
+GOOGLE_CLOUD_PROJECT=your-project-id
+GOOGLE_CLOUD_LOCATION=us-central1
+GOOGLE_APPLICATION_CREDENTIALS_JSON={"type":"service_account","project_id":"...","private_key_id":"...","private_key":"...","client_email":"...","client_id":"...","auth_uri":"...","token_uri":"...","auth_provider_x509_cert_url":"...","client_x509_cert_url":"..."}
+AI_MODEL_NAME=gemini-1.5-flash
+
+# Alternative: Use file path instead of JSON
+# GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account.json
+```
+
+#### 14.3.2 Environment-Specific Configuration
+
+**Development**:
+```env
+DATABASE_URL=sqlite+aiosqlite:///./chess_coach.db
+REDIS_URL=redis://localhost:6379/0
+ALLOW_DEV_TOKEN_ENDPOINT=1
+JWT_SECRET=dev-secret-key
+```
+
+**Production**:
+```env
+DATABASE_URL=postgresql+asyncpg://user:password@localhost/chess_coach
+REDIS_URL=redis://localhost:6379/0
+ALLOW_DEV_TOKEN_ENDPOINT=0
+JWT_SECRET=<strong-random-secret>
+```
+
+#### 14.3.3 Tailscale Setup Guide
+
+1. **Install Tailscale** on Mac Mini
+2. **Enable Funnel**:
+   ```bash
+   tailscale funnel 443
+   ```
+3. **Configure Backend**:
+   - Backend binds to `127.0.0.1:8080`
+   - Tailscale forwards public HTTPS to localhost:8080
+4. **Access**:
+   - Public URL: `https://your-machine.tailscale.ts.net`
+   - Clients connect via HTTPS
+   - TLS terminates at Tailscale edge
+
+### 14.4 Deployment Step-by-Step Guide
+
+#### 14.4.1 Prerequisites
+
+- Mac Mini with macOS
+- Docker Desktop installed
+- Tailscale account and client
+- Python 3.10+ (for local development)
+- Node.js 18+ (for frontend build)
+
+#### 14.4.2 Installation Steps
+
+1. **Clone Repository**:
+   ```bash
+   git clone <repository-url>
+   cd chess-in-one-ai-coach
+   ```
+
+2. **Backend Setup**:
+   ```bash
+   cd backend
+   cp .env.example .env
+   # Edit .env with your configuration
+   ```
+
+3. **Install Dependencies**:
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+4. **Initialize Database**:
+   ```bash
+   python scripts/init_db.py
+   ```
+
+5. **Frontend Build**:
+   ```bash
+   cd ../web
+   npm install
+   npm run build
+   ```
+
+6. **Start Services** (Development):
+   ```bash
+   cd ../backend
+   uvicorn api.main:app --reload --port 8080
+   ```
+
+7. **Start Services** (Production with Docker):
+   ```bash
+   cd backend
+   docker-compose up -d
+   ```
+
+#### 14.4.3 Configuration Walkthrough
+
+1. **Configure Database**:
+   - Edit `DATABASE_URL` in `.env`
+   - For production, use PostgreSQL
+
+2. **Configure AI Providers**:
+   - Add OpenAI API key OR
+   - Add Google Vertex AI credentials
+   - Set model names
+
+3. **Configure Authentication**:
+   - Set strong `JWT_SECRET`
+   - Set `ALLOW_DEV_TOKEN_ENDPOINT=0` in production
+
+4. **Configure Tailscale**:
+   - Install Tailscale client
+   - Enable funnel: `tailscale funnel 443`
+   - Note the public URL
+
+#### 14.4.4 Verification and Testing
+
+1. **Health Check**:
+   ```bash
+   curl http://localhost:8080/health
+   # Should return: {"status": "healthy"}
+   ```
+
+2. **Generate Dev Token** (dev only):
+   ```bash
+   curl http://localhost:8080/dev/token?role=CHILD
+   ```
+
+3. **Test Game Creation**:
+   ```bash
+   curl -X POST http://localhost:8080/games \
+     -H "Authorization: Bearer <token>" \
+     -H "Content-Type: application/json" \
+     -d '{"player_color": "WHITE", "opponent_name": "Test"}'
+   ```
+
+4. **Check Logs**:
+   ```bash
+   tail -f docs/debug/backend.log
+   ```
+
+### 14.5 Code Examples
+
+#### 14.5.1 Position Criticality Scoring
+
+**Location**: `backend/api/ai/position_analyzer.py:416-463`
+
+```python
+def _calculate_criticality_score(
+    self,
+    eval_score: float,
+    previous_eval: Optional[float],
+    material_balance: float,
+    tactical_patterns: List[str],
+    king_safety_score: float,
+    move_quality_score: float,
+    threats: List[str],
+    depth: int
+) -> float:
+    """
+    Calculate overall criticality score (0-100).
+    Higher score = more critical position for coaching.
+    """
+    score = 0.0
+    
+    # 1. Evaluation swing (transition) - up to 30 points
+    if previous_eval is not None:
+        eval_change = abs(eval_score - previous_eval)
+        if eval_change > 0.5:
+            score += min(30.0, eval_change * 15.0)
+    
+    # 2. Tactical patterns - up to 25 points
+    if tactical_patterns:
+        score += min(25.0, len(tactical_patterns) * 8.0)
+    
+    # 3. Threats detected - up to 20 points
+    if threats:
+        score += min(20.0, len(threats) * 5.0)
+    
+    # 4. King safety issues - up to 15 points
+    if king_safety_score < 50.0:
+        score += (50.0 - king_safety_score) / 50.0 * 15.0
+    
+    # 5. Move quality (suboptimal moves are more critical) - up to 10 points
+    if move_quality_score < 0.7:
+        score += (0.7 - move_quality_score) / 0.7 * 10.0
+    
+    # 6. Large evaluation imbalance - up to 10 points
+    if abs(eval_score) > 1.0:
+        score += min(10.0, (abs(eval_score) - 1.0) * 5.0)
+    
+    return min(100.0, score)
+```
+
+#### 14.5.2 State Machine Enforcement
+
+**Location**: `backend/api/games/submission_service.py:13-87`
+
+```python
+async def submit_game(self, game_id: int, pgn: str, tier: str) -> dict:
+    """Submit a game for AI processing."""
+    # Fetch game
+    result = await self.db.execute(select(Game).where(Game.id == game_id))
+    game = result.scalar_one_or_none()
+    if not game:
+        raise ValueError("Game not found")
+    
+    # Check idempotency
+    if game.state == GameState.SUBMITTED:
+        return {"message": "Game already submitted", "state": game.state}
+    
+    # Validate transition - ENFORCEMENT POINT
+    if game.state != GameState.EDITABLE:
+        raise ValueError(f"Invalid transition from {game.state} to SUBMITTED")
+    
+    # Check parent approval requirement
+    requires_approval = await self._requires_approval(game_id, tier)
+    if requires_approval:
+        approval = await self._get_valid_approval(game_id, tier)
+        if not approval:
+            raise ValueError(f"Parent approval required for {tier} tier or repeat run")
+        approval.used = True
+    
+    # Update PGN and freeze annotations
+    game.pgn = pgn
+    await self.db.execute(
+        update(Annotation)
+        .where(Annotation.game_id == game_id)
+        .values(frozen=True)
+    )
+    
+    # Transition to SUBMITTED - IMMUTABLE TRANSITION
+    game.state = GameState.SUBMITTED
+    await self.db.commit()
+    
+    return {"message": "Game submitted successfully", "state": game.state}
+```
+
+#### 14.5.3 AI Provider Integration with Fallback
+
+**Location**: `backend/api/ai/providers/socratic_questioner.py:33-81`
+
+```python
+async def generate_question(
+    self,
+    category: str,
+    engine_truth: Dict[str, Any],
+    student_annotation: Optional[str] = None,
+    reason_code: Optional[str] = None
+) -> str:
+    """
+    Generate a Socratic question for a specific category.
+    Implements fallback chain: OpenAI → Vertex AI → Template
+    """
+    # Try OpenAI first if configured
+    if self.openai_api_key:
+        try:
+            return await self._generate_with_openai(
+                category, engine_truth, student_annotation, reason_code
+            )
+        except Exception as e:
+            logger.warning(f"OpenAI question generation failed: {e}")
+    
+    # Fall back to Google Vertex AI if configured
+    if self.google_credentials and self.google_project:
+        try:
+            return await self._generate_with_vertex(
+                category, engine_truth, student_annotation, reason_code
+            )
+        except Exception as e:
+            logger.warning(f"Vertex AI question generation failed: {e}")
+    
+    # Fallback to template if no AI configured
+    logger.warning("No AI provider configured, using template question")
+    return self._generate_template_question(
+        category, engine_truth, student_annotation, reason_code
+    )
+```
+
+#### 14.5.4 Validation Logic
+
+**Location**: `backend/api/ai/validators/orchestrator_validator.py:1-23`
+
+```python
+def validate_analyzer_output(output: dict):
+    """
+    Implements PHASE 4: AI Role Contracts & Validators.
+    Validators MUST throw on first violation.
+    """
+    if "key_positions" not in output:
+        raise ValueError("Missing key_positions in analyzer output")
+    
+    kp_count = len(output["key_positions"])
+    if not (1 <= kp_count <= 5):
+        raise ValueError(f"Invalid number of key positions: {kp_count}")
+    
+    for kp in output["key_positions"]:
+        required = ["fen", "reason_code", "engine_truth"]
+        for field in required:
+            if field not in kp:
+                raise ValueError(f"Missing field {field} in key position")
+        
+        # Implementation Spec 9.1: Accept EngineTruth as immutable input
+        engine_truth = kp["engine_truth"]
+        if "best_move" not in engine_truth or "score" not in engine_truth:
+            raise ValueError("EngineTruth missing best_move or score")
+```
+
+### 14.6 Troubleshooting Guide
 
 **Common Issues**:
 1. **AI Provider Not Configured**: Check `.env` file, restart backend
@@ -1115,7 +2249,7 @@ sequenceDiagram
 - `/pci/debug-settings`: Settings debug
 - `/dev/token`: Dev token generation (dev only)
 
-### 14.5 Known Limitations
+### 14.7 Known Limitations
 
 1. **Single-Instance**: No horizontal scaling
 2. **Redis Optional**: System works without Redis (no locking)
@@ -1125,12 +2259,116 @@ sequenceDiagram
 
 ---
 
-**Document Status**: IN PROGRESS - Core sections complete, diagrams and appendices need expansion
+## 15. Remaining Work & Enhancements
 
-**Next Steps**:
-- Expand diagrams section
-- Add more sequence diagrams
-- Complete appendices
-- Add code examples
-- Add deployment guide
+### 15.1 Diagrams Section (Complete)
+
+**Completed**:
+- ✅ System architecture diagram (Section 13.1)
+- ✅ Game lifecycle state machine (Section 13.2)
+- ✅ AI pipeline flow (Section 13.3)
+- ✅ Question answering flow (Section 13.4)
+- ✅ Game creation and annotation flow (Section 13.5)
+- ✅ Parent approval workflow (Section 13.6)
+- ✅ Error recovery and fallback flow (Section 13.7)
+- ✅ Reflection generation sequence (Section 13.8)
+- ✅ Component interaction diagram (Section 13.9)
+- ✅ Data flow diagram (Section 13.10)
+- ✅ Deployment diagram (Section 13.11)
+- ✅ Security boundary diagram (Section 13.12)
+
+### 15.2 Appendices (Complete)
+
+**Completed**:
+- ✅ Complete API reference with request/response examples (Section 14.1)
+- ✅ Database schema with ERD diagram (Section 14.2)
+- ✅ Configuration examples and Tailscale setup (Section 14.3)
+- ✅ Deployment step-by-step guide (Section 14.4)
+- ✅ Code examples for key algorithms (Section 14.5)
+- ✅ Troubleshooting guide (Section 14.6)
+- ✅ Known limitations (Section 14.7)
+
+### 15.3 Code References (Complete)
+
+**Completed**:
+- ✅ File paths referenced throughout document
+- ✅ Function names documented
+- ✅ Algorithm references with line numbers (Section 12.1)
+- ✅ Code snippets for key algorithms (Section 14.5)
+- ✅ State machine enforcement code examples
+- ✅ AI provider integration examples
+- ✅ Validation logic examples
+
+### 15.4 Additional Sections (Optional Enhancements)
+
+**Not Yet Included**:
+- ❌ **Testing Strategy**:
+  - Unit testing approach
+  - Integration testing strategy
+  - End-to-end testing
+  - Test coverage requirements
+- ❌ **Monitoring and Observability**:
+  - Logging strategy
+  - Metrics and monitoring
+  - Alerting configuration
+  - Performance monitoring
+- ❌ **Backup and Recovery Procedures**:
+  - Database backup strategy
+  - Configuration backup
+  - Disaster recovery plan
+  - Data retention policies
+- ❌ **Performance Tuning Guide**:
+  - Database optimization
+  - API performance tuning
+  - Caching strategies
+  - Resource optimization
+- ❌ **Security Hardening Checklist**:
+  - Security configuration checklist
+  - Vulnerability assessment
+  - Security best practices
+  - Compliance verification
+
+### 15.4 Optional Enhancements (Future Work)
+
+**Not Yet Included** (Optional):
+- ❌ **Testing Strategy**:
+  - Unit testing approach
+  - Integration testing strategy
+  - End-to-end testing
+  - Test coverage requirements
+- ❌ **Monitoring and Observability**:
+  - Logging strategy (basic logging documented)
+  - Metrics and monitoring
+  - Alerting configuration
+  - Performance monitoring
+- ❌ **Backup and Recovery Procedures**:
+  - Database backup strategy
+  - Configuration backup
+  - Disaster recovery plan
+  - Data retention policies
+- ❌ **Performance Tuning Guide**:
+  - Database optimization
+  - API performance tuning
+  - Caching strategies
+  - Resource optimization
+- ❌ **Security Hardening Checklist**:
+  - Security configuration checklist
+  - Vulnerability assessment
+  - Security best practices
+  - Compliance verification
+
+---
+
+**Document Status**: COMPLETE - All core sections and major enhancements documented
+
+**Current State**:
+- ✅ All 15 major sections documented
+- ✅ Core architecture and design complete
+- ✅ 12 Mermaid diagrams included (architecture, flows, ERD, deployment, security)
+- ✅ Complete API reference with examples
+- ✅ Database schema with ERD
+- ✅ Configuration examples and deployment guide
+- ✅ Code examples for key algorithms
+- ✅ Functional and comprehensive for onboarding and reference
+- 🔄 Optional enhancements available for future work (see Section 15.4)
 
