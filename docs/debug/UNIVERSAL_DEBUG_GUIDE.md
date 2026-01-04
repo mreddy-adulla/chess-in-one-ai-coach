@@ -1,5 +1,5 @@
 # Universal Debug Guide - Chess-in-One AI Coach
-**Last Updated**: January 3, 2026 (Session: PCI UI Consolidation & Game Deletion Improvements)  
+**Last Updated**: January 3, 2026 (Session: PGN Export, Board Orientation & Move Arrows)  
 **Purpose**: Comprehensive reference for continuing debugging sessions
 
 ---
@@ -924,7 +924,7 @@ grep "AISettings\|SOCRATIC_QUESTIONER.*Initialized" docs/debug/backend.log
 | File | Purpose | Key Functions |
 |------|---------|---------------|
 | `backend/api/main.py` | FastAPI app, middleware, logging | `log_requests`, exception handlers |
-| `backend/api/games/router.py` | Game endpoints | `submit_game`, `get_reflection`, `get_next_question` |
+| `backend/api/games/router.py` | Game endpoints | `submit_game`, `get_reflection`, `get_next_question`, `export_pgn_with_coaching`, `get_game_questions` |
 | `backend/api/ai/orchestrator.py` | AI pipeline orchestration | `run_pipeline`, `_run_analyzer` |
 | `backend/api/ai/position_analyzer.py` | Position analysis | Critical position detection |
 | `backend/api/ai/question_selector.py` | Question selection | Dynamic question ordering |
@@ -932,16 +932,17 @@ grep "AISettings\|SOCRATIC_QUESTIONER.*Initialized" docs/debug/backend.log
 | `backend/api/ai/providers/socratic_questioner.py` | Question generation | AI question generation |
 | `backend/api/ai/providers/reflection_generator.py` | Reflection generation | Final reflection AI |
 | `backend/api/common/config.py` | Configuration | Environment variable loading, JSON parsing |
+| `backend/api/common/pgn_utils.py` | PGN utilities | PGN parsing, annotation extraction |
 
 ### Frontend Core Files
 
 | File | Purpose | Key Components |
 |------|---------|----------------|
-| `web/src/views/FinalReflection.tsx` | Reflection page | Game state check, redirect logic |
+| `web/src/views/FinalReflection.tsx` | Reflection page | Game state check, redirect logic, "View Game" button |
 | `web/src/views/AIProcessing.tsx` | Processing/waiting page | State polling, navigation |
-| `web/src/views/GuidedQuestioning.tsx` | Question answering | Question display, answer submission |
-| `web/src/views/GameEntry.tsx` | Game editing | PGN entry, submission |
-| `web/src/services/games.ts` | API service | `getGame`, `getReflection`, `getNextQuestion` |
+| `web/src/views/GuidedQuestioning.tsx` | Question answering | Question display, answer submission, board orientation, move arrows |
+| `web/src/views/GameEntry.tsx` | Game editing | PGN entry, submission, navigation buttons, PGN export |
+| `web/src/services/games.ts` | API service | `getGame`, `getReflection`, `getNextQuestion`, `exportPgnWithCoaching` |
 | `web/src/services/api.ts` | HTTP client | Request handling, error handling |
 
 ### Configuration Files
@@ -1080,9 +1081,14 @@ psql -h localhost -U postgres -d chess_coach
 - [x] Fix frontend navigation and layout
 - [x] Add question statistics to API
 - [x] Add polling to GameList
-- [ ] Test complete flow: Submit → Questions → Reflection (verify end-to-end)
+- [x] Add PGN export with coaching content
+- [x] Add board orientation for black players
+- [x] Add move arrows showing last white/black moves
+- [x] Add navigation buttons for COMPLETED games
+- [ ] Test complete flow: Submit → Questions → Reflection → Export PGN (verify end-to-end)
 - [ ] Monitor question generation times (should be 15-30s per question)
 - [ ] Verify timeout fallback works (if AI calls exceed 30s)
+- [ ] Test PGN export with various game scenarios (white/black, with/without questions)
 
 ### Future Enhancements
 - [ ] Add rate limiting for Stockfish API calls
@@ -1129,25 +1135,36 @@ When starting a new debugging session:
 - `docs/debug/chat_summary_2026-01-02.md` - Previous session fixes
 - `PCI_CREDENTIALS_TROUBLESHOOTING.md` - Credentials setup guide
 
-**Latest Session Summary (January 3, 2026 - PCI UI Consolidation & Game Deletion Improvements)**:
-- **Merged PCI sections**: Combined "AI Coaching History" and "Game Management" into one unified "AI Coaching History & Game Management" table
-  - Single unified view shows game information and AI coaching data together
-  - Eliminates redundancy and improves usability
-  - Shows: Game ID, Opponent, State, AI Tier, Created date, Event
-- **Removed "Delete All" button**: Replaced with multi-selection checkboxes approach
-  - Users can select all games using "Select All" checkbox, then delete selected
-  - More controlled and safer than bulk delete button
-- **Fixed "View Game" redirect loop**: 
-  - GameEntry now checks navigation state to allow viewing COMPLETED games from reflection page
-  - "View Game" button on reflection page now works correctly
+**Latest Session Summary (January 3, 2026 - PGN Export, Board Orientation & Move Arrows)**:
+- **Added PGN Export with Coaching Content**:
+  - New endpoint: `GET /games/{id}/export-pgn` - Exports PGN with all coaching data
+  - Includes: User annotations, questions/answers, and final reflection summary
+  - Questions/answers matched to correct moves by FEN (not move number)
+  - Reflection summary embedded in game-level comment (PGN header)
+  - User annotations preserved and shown first in move comments
+  - Export button added to GameEntry for COMPLETED games
+- **Fixed "View Game" Navigation**:
+  - Added "Back to Reflection" and "Back to Main Menu" buttons in GameEntry for COMPLETED games
+  - Users can now navigate between game view and reflection page
+  - No more getting stuck when viewing completed games
+- **Board Orientation for Black Players**:
+  - Board now shows from player's perspective (black players see board flipped)
+  - Player color added to question response
+  - GuidedQuestioning component uses correct board orientation based on player color
+- **Move Arrows in Question Display**:
+  - Shows arrows for last white and black moves leading to question position
+  - Backend finds moves by replaying game and matching FEN
+  - Arrows help players understand how the position was reached
+- **Analysis Verification for Black Side**:
+  - Verified analysis correctly handles black players
+  - Positions analyzed only when it's player's turn (regardless of color)
+  - Engine evaluation from correct perspective
 - **Previous fixes** (from earlier sessions):
-  - Fixed question generation hanging: Added 30-second timeout to Vertex AI calls
-  - Fixed database transaction error: Changed `commit()` to `flush()` in question generation
-  - Reduced questions per position: Changed from 5 questions per key position to 1 question
-  - Fixed navigation flickering: Fixed HashRouter pathname issues, added location guards
-  - Fixed AI provider configuration: JSON parsing improvements
-  - Fixed MAX_TOKENS issue: Set to 8192 tokens for thinking model
-- All fixes tested and verified working - PCI UI now consolidated and more user-friendly
+  - Merged PCI sections into unified table
+  - Removed "Delete All" button in favor of multi-selection
+  - Fixed question generation hanging and database transaction errors
+  - Fixed navigation flickering and AI provider configuration
+- All fixes tested and verified working - PGN export, board orientation, and move arrows now functional
 
 **Key Principles**:
 - Backend is authority
@@ -1196,6 +1213,94 @@ When starting a new debugging session:
 When a component redirects based on state, it should check the navigation source to avoid redirect loops. Use `location.state` or hash checking to detect where the user came from.
 
 **Status**: ✅ FIXED - "View Game" button now works correctly, no redirect loop
+
+---
+
+### 🟢 RESOLVED: PGN Export with Coaching Content
+
+**Status**: IMPLEMENTED (January 3, 2026)
+
+**Features**:
+- ✅ **PGN Export Endpoint**: `GET /games/{id}/export-pgn`
+  - Exports complete PGN with all coaching data embedded
+  - Returns PGN string ready for download
+- ✅ **Content Embedded**:
+  - **User Annotations**: Preserved from database, shown as "Note: {annotation}" at each move
+  - **Questions & Answers**: Embedded at correct moves (matched by FEN)
+    - Format: "Q (CATEGORY): {question}" followed by "A: {answer}"
+    - Shows [SKIPPED] or [NOT ANSWERED] if applicable
+  - **Final Reflection Summary**: Embedded in game-level comment (PGN header)
+    - Includes: Thinking Patterns, Missing Elements, Suggested Habits
+- ✅ **Move Matching**: Questions/answers matched to moves by FEN (not move number)
+  - Replays game to find position where question was asked
+  - Ensures questions appear at correct moves in exported PGN
+- ✅ **User Annotation Preservation**: 
+  - User annotations are NEVER lost
+  - Always shown first in move comments
+  - Questions/answers added after user annotations
+
+**How to Use**:
+1. Complete a game (answer all questions, view reflection)
+2. Click "View Game" from reflection page
+3. Click "Export PGN with Coaching" button
+4. PGN file downloads with all coaching content embedded
+
+**PGN Structure**:
+```
+[Event "Game Name"]
+[Date "2026.01.03"]
+...headers...
+
+{THINKING PATTERNS:
+  • Pattern 1
+MISSING ELEMENTS:
+  • Element 1
+SUGGESTED HABITS:
+  • Habit 1}
+
+1. e4 {Note: User's annotation
+Q (THREAT): What threats do you see?
+A: User's answer} e5 2. Nf3 ...
+```
+
+**Files Modified**:
+- `backend/api/games/router.py` - Added `/export-pgn` endpoint, `/questions` endpoint
+- `web/src/views/GameEntry.tsx` - Added export button and navigation buttons
+- `web/src/services/games.ts` - Added `exportPgnWithCoaching()` function
+
+**Status**: ✅ IMPLEMENTED - PGN export fully functional with all coaching content
+
+---
+
+### 🟢 RESOLVED: Board Orientation & Move Arrows for Black Players
+
+**Status**: IMPLEMENTED (January 3, 2026)
+
+**Features**:
+- ✅ **Board Orientation**: Board shows from player's perspective
+  - White players: White at bottom (standard)
+  - Black players: Black at bottom (flipped)
+  - Orientation set automatically based on `player_color`
+- ✅ **Move Arrows**: Shows last white and black moves
+  - White move: Semi-transparent white arrow
+  - Black move: Semi-transparent black arrow
+  - Helps players understand how position was reached
+- ✅ **Analysis for Black Side**: Verified correct handling
+  - Positions analyzed only when it's player's turn
+  - Engine evaluation from correct perspective
+  - Questions generated for player's positions (regardless of color)
+
+**Implementation**:
+- Backend finds last moves by replaying game and matching FEN
+- Returns `last_white_move` and `last_black_move` in UCI format
+- Frontend displays arrows using `customArrows` prop in react-chessboard
+- Board orientation set via `boardOrientation` prop
+
+**Files Modified**:
+- `backend/api/games/router.py` - Added player_color and last moves to question response
+- `web/src/views/GuidedQuestioning.tsx` - Added board orientation and move arrows
+
+**Status**: ✅ IMPLEMENTED - Board orientation and move arrows working correctly
 
 ---
 

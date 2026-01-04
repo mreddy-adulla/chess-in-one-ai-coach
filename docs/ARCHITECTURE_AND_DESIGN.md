@@ -1,7 +1,7 @@
 # Chess-in-One AI Coach - Comprehensive Architecture & Design Document
 
-**Status**: IN PROGRESS  
-**Last Updated**: January 3, 2026  
+**Status**: COMPLETE  
+**Last Updated**: January 3, 2026 (PGN Export, Board Orientation & Move Arrows)  
 **Purpose**: Complete end-to-end architectural and design reference
 
 ---
@@ -247,8 +247,9 @@ The system follows a strict Hybrid Intelligence model:
   - Evaluation imbalances
   - Move quality
   - Game phase
-- Returns 3-5 questions per position (not always 6)
-- Always includes REFLECTION at the end
+- **Returns 1 question per key position** (highest priority only)
+- Priority order: THREAT > OPP_INTENT > CHANGE > ALTERNATIVES > WORST_PIECE > REFLECTION
+- Typically 3-5 key positions = 3-5 total questions per game
 
 **Question Categories**:
 - `OPP_INTENT`: Opponent's intentions
@@ -414,8 +415,8 @@ The system follows a strict Hybrid Intelligence model:
 - `CreateGame.tsx`: Game creation
 - `GameEntry.tsx`: Game editing and annotation
 - `AIProcessing.tsx`: Processing/waiting page
-- `GuidedQuestioning.tsx`: Question answering interface
-- `FinalReflection.tsx`: Reflection display
+- `GuidedQuestioning.tsx`: Question answering interface with board orientation and move arrows
+- `FinalReflection.tsx`: Reflection display with "View Game" button
 - `ParentControlInterface.tsx`: Parent control dashboard
 
 **Components**:
@@ -427,7 +428,7 @@ The system follows a strict Hybrid Intelligence model:
 
 **Services**:
 - `api.ts`: HTTP client with error handling
-- `games.ts`: Game API service methods
+- `games.ts`: Game API service methods (includes `exportPgnWithCoaching`, `getGameQuestions`)
 
 **State Management**:
 - React hooks for local state
@@ -504,6 +505,15 @@ EDITABLE → SUBMITTED → COACHING → COMPLETED
 - Stored in `Game.reflection` JSON field
 - Game state → COMPLETED
 
+**PGN Export Flow**:
+- Available for COMPLETED games
+- Fetches game with annotations, key positions, and questions
+- Replays game to match questions/answers to moves by FEN
+- Embeds reflection summary in game-level comment (PGN header)
+- Embeds user annotations at player moves (preserved, shown first)
+- Embeds questions/answers at correct moves (matched by FEN after move)
+- Returns complete PGN string ready for download
+
 ### 4.3 Question Flow State Machine
 
 **Per-Position Flow**:
@@ -514,8 +524,9 @@ EDITABLE → SUBMITTED → COACHING → COMPLETED
 
 **Question Sequence**:
 - Not fixed order (dynamic selection)
-- 3-5 questions per position
-- REFLECTION always at end
+- **1 question per key position** (highest priority only)
+- Typically 3-5 total questions per game (3-5 key positions)
+- Priority order: THREAT > OPP_INTENT > CHANGE > ALTERNATIVES > WORST_PIECE > REFLECTION
 - Adapts to game phase
 
 **Answer Handling**:
@@ -1065,9 +1076,12 @@ sequenceDiagram
     participant ReflectionGen
     
     Client->>API: GET /games/{id}/next-question
-    API->>DB: Query unanswered question
-    DB-->>API: Question
-    API-->>Client: Question + FEN + annotation
+    API->>DB: Query unanswered question with KeyPosition
+    DB-->>API: Question + KeyPosition
+    API->>API: Replay game to find last white/black moves
+    API-->>Client: Question + FEN + annotation + player_color + last_moves
+    
+    Note over Client: Display board with orientation<br/>based on player_color<br/>Show arrows for last moves
     
     Client->>API: POST /questions/{id}/answer
     API->>DB: Save answer
@@ -1307,14 +1321,14 @@ flowchart TD
     Create --> EditState[Game State: EDITABLE]
     
     EditState --> Annotate[User Adds Annotations]
-    Annotate --> SaveAnnot[POST /games/{id}/annotations]
+    Annotate --> SaveAnnot["POST /games/{id}/annotations"]
     SaveAnnot --> EditState
     
     EditState --> Submit[User Submits Game]
-    Submit --> SubmitAPI[POST /games/{id}/submit]
-    SubmitAPI --> CheckApproval{Approval<br/>Required?}
+    Submit --> SubmitAPI["POST /games/{id}/submit"]
+    SubmitAPI --> CheckApproval{"Approval Required?"}
     
-    CheckApproval -->|Yes| ApprovalCheck{Valid<br/>Approval?}
+    CheckApproval -->|Yes| ApprovalCheck{"Valid Approval?"}
     CheckApproval -->|No| FreezeAnnot[Freeze Annotations]
     
     ApprovalCheck -->|No| Reject[403 Forbidden]
@@ -1341,11 +1355,11 @@ flowchart TD
     
     SaveQuestions --> CoachingState[Game State: COACHING]
     
-    CoachingState --> GetQuestion[GET /games/{id}/next-question]
+    CoachingState --> GetQuestion["GET /games/{id}/next-question"]
     GetQuestion --> DisplayQuestion[Display Question to User]
     DisplayQuestion --> Answer[User Answers Question]
-    Answer --> SaveAnswer[POST /questions/{id}/answer]
-    SaveAnswer --> CheckRemaining{All Questions<br/>Answered?}
+    Answer --> SaveAnswer["POST /questions/{id}/answer"]
+    SaveAnswer --> CheckRemaining{"All Questions Answered?"}
     
     CheckRemaining -->|No| GetQuestion
     CheckRemaining -->|Yes| GenerateReflection[Generate Reflection]
@@ -1356,7 +1370,18 @@ flowchart TD
     SaveReflection --> CompletedState[Game State: COMPLETED]
     
     CompletedState --> DisplayReflection[Display Reflection to User]
-    DisplayReflection --> End([End])
+    DisplayReflection --> ViewGame{User Clicks<br/>"View Game"?}
+    
+    ViewGame -->|Yes| ShowGame[Show Game Board<br/>with Navigation Buttons]
+    ShowGame --> ExportPGN{User Clicks<br/>"Export PGN"?}
+    
+    ViewGame -->|No| End
+    
+    ExportPGN -->|Yes| GeneratePGN[Generate PGN with<br/>All Coaching Content]
+    GeneratePGN --> DownloadPGN[Download PGN File]
+    DownloadPGN --> End
+    
+    ExportPGN -->|No| End
 ```
 
 ### 13.11 Deployment Diagram
@@ -1681,7 +1706,80 @@ graph TB
 }
 ```
 
-#### 14.1.4 Parent Control Interface Endpoints
+#### 14.1.4 PGN Export Endpoints
+
+**GET /games/{id}/export-pgn** - Export PGN with all coaching content
+
+**Response** (200 OK):
+```
+Content-Type: text/plain
+
+[Event "Local Tournament"]
+[Date "2026.01.03"]
+[White "Player"]
+[Black "Opponent"]
+[Result "1-0"]
+
+{THINKING PATTERNS:
+  • Pattern 1
+MISSING ELEMENTS:
+  • Element 1
+SUGGESTED HABITS:
+  • Habit 1}
+
+1. e4 {Note: User's annotation
+Q (THREAT): What threats do you see?
+A: User's answer} e5 2. Nf3 Nc6 ...
+```
+
+**Note**: 
+- Reflection summary embedded in game-level comment (PGN header)
+- User annotations preserved and shown first in move comments (format: "Note: {annotation}")
+- Questions/answers embedded at correct moves (matched by FEN after move)
+- Question format: "Q (CATEGORY): {question}"
+- Answer format: "A: {answer}"
+- Shows [SKIPPED] or [NOT ANSWERED] if applicable
+
+**Error Response** (404 Not Found) - Game not found:
+```json
+{
+  "detail": "Game not found"
+}
+```
+
+**Error Response** (400 Bad Request) - Game not completed:
+```json
+{
+  "detail": "PGN export only available for completed games"
+}
+```
+
+**GET /games/{id}/questions** - Get all questions for a game
+
+**Response** (200 OK):
+```json
+{
+  "questions": [
+    {
+      "fen": "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1",
+      "questions": [
+        {
+          "id": 5,
+          "category": "THREAT",
+          "question_text": "What threats do you see?",
+          "answer_text": "I see a fork threat",
+          "skipped": false
+        }
+      ],
+      "original_annotation": "I was looking for tactics here"
+    }
+  ]
+}
+```
+
+**Note**: Used internally by PGN export to match questions to moves by FEN.
+
+#### 14.1.5 Parent Control Interface Endpoints
 
 **GET /pci/settings** - Get AI provider settings
 
