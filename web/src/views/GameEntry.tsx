@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { Chess, Move } from 'chess.js';
 import { getGame, addAnnotation, submitGame } from '../services/games';
 import ChessBoard from '../components/ChessBoard';
@@ -9,6 +9,8 @@ import GameSubmission from '../components/GameSubmission';
 
 const GameEntry: React.FC = () => {
   const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
+  const location = useLocation();
   const [gameData, setGameData] = useState<any>(null);
   const [chess, setChess] = useState(new Chess());
   const [annotation, setAnnotation] = useState('');
@@ -21,6 +23,22 @@ const GameEntry: React.FC = () => {
   useEffect(() => {
     if (id) {
       getGame(parseInt(id)).then(data => {
+        // If game is COMPLETED, only redirect if we're NOT coming from reflection page
+        // This allows "View Game" button from reflection page to work
+        if (data.state === 'COMPLETED') {
+          const currentHash = window.location.hash;
+          const isFromReflection = currentHash.includes('/reflection') || 
+                                   (location.state as any)?.fromReflection === true;
+          
+          if (!isFromReflection) {
+            console.log('[GameEntry] Game in COMPLETED state, redirecting to reflection page');
+            navigate(`/game/${id}/reflection`);
+            return;
+          } else {
+            console.log('[GameEntry] Game in COMPLETED state, but coming from reflection page - allowing view');
+          }
+        }
+        
         setGameData(data);
         if (data.pgn) {
           const newChess = new Chess();
@@ -92,7 +110,7 @@ const GameEntry: React.FC = () => {
       try {
         const response = await submitGame(parseInt(id), chess.pgn());
         console.log('[GameEntry] Submission success:', response);
-        window.location.hash = `/game/${id}/waiting`;
+        navigate(`/game/${id}/waiting`);
       } catch (err: any) {
         console.error('[GameEntry] Submission failed:', err);
         alert(`Failed to submit game: ${err.message || 'Unknown error'}`);
@@ -261,6 +279,24 @@ const GameEntry: React.FC = () => {
                     </button>
                   </div>
                 )}
+              </div>
+            )}
+            
+            {gameData.state === 'COACHING' && (
+              <div className="space-y-3">
+                <div className="p-3 bg-purple-50 border border-purple-100 rounded-lg text-[10px] text-purple-700 font-medium leading-relaxed">
+                  Your game has been analyzed! Answer questions to receive personalized coaching feedback.
+                </div>
+                <button 
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    navigate(`/game/${id}/coaching`);
+                  }}
+                  className="w-full py-4 bg-purple-600 text-white rounded-xl text-sm font-black uppercase tracking-widest hover:bg-purple-700 shadow-xl shadow-purple-200 transition-all hover:-translate-y-0.5 active:translate-y-0"
+                >
+                  📝 View Questions to Answer
+                </button>
               </div>
             )}
           </div>
